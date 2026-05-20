@@ -21,7 +21,7 @@ export class Backend {
   start(onExit) {
     if (this._proc) return;
     const launcher = new Gio.SubprocessLauncher({
-      flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+      flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE,
     });
     launcher.setenv("GLANCE_PORT", String(this._port), true);
     launcher.setenv("GLANCE_HOST", this._host, true);
@@ -32,18 +32,51 @@ export class Backend {
       log(`[glance] backend spawn failed: ${e.message}`);
       this._proc = null;
       this._started = false;
+      if (onExit) onExit({ fastExit: true, status: -1, stderr: e.message });
       return;
     }
-    this._proc.wait_async(null, (p, res) => {
+    const spawnedAt = GLib.get_monotonic_time();
+    const proc = this._proc;
+    this._firstStderrLine = "";
+    this._startStderrDrain(proc);
+    proc.wait_async(null, (p, res) => {
+      let status = 0;
       try { p.wait_finish(res); } catch (_) {}
+      try { status = p.get_exit_status(); } catch (_) {}
+      const fastExit = (GLib.get_monotonic_time() - spawnedAt) < 1_000_000;
+      const stderr = this._firstStderrLine;
+      log(`[glance] backend exited (status=${status}${fastExit ? ", fast" : ""})${stderr ? ": " + stderr : ""}`);
       this._started = false;
       this._proc = null;
       if (this._killTimer) {
         GLib.Source.remove(this._killTimer);
         this._killTimer = 0;
       }
-      if (onExit) onExit();
+      if (onExit) onExit({ fastExit, status, stderr });
     });
+  }
+
+  // Continuously drain stderr so the pipe buffer never fills (which would
+  // block the child on write and prevent wait_async from firing).
+  // Capture the first non-empty line for diagnostics.
+  _startStderrDrain(proc) {
+    const stream = proc.get_stderr_pipe();
+    if (!stream) return;
+    const data = new Gio.DataInputStream({ base_stream: stream });
+    const readNext = () => {
+      data.read_line_async(GLib.PRIORITY_DEFAULT, null, (s, res) => {
+        let bytes = null;
+        try { [bytes] = s.read_line_finish(res); } catch (_) { return; }
+        if (bytes === null) {
+          try { stream.close(null); } catch (_) {}
+          return;
+        }
+        const line = new TextDecoder().decode(bytes).trim();
+        if (line && !this._firstStderrLine) this._firstStderrLine = line;
+        readNext();
+      });
+    };
+    readNext();
   }
 
   stop() {

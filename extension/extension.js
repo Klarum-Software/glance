@@ -91,7 +91,13 @@ class GlanceIndicator extends PanelMenu.Button {
         this._backend = new Backend({ nodePath, serverPath, port });
 
         if (this._settings.get_boolean("auto-start-backend")) {
-            this._backend.start(() => log("[glance] backend exited"));
+            this._backend.start((info) => {
+                if (info && info.fastExit) {
+                    const tail = info.stderr ? ` — ${info.stderr}` : "";
+                    Main.notify("glance backend failed to start",
+                                `exit ${info.status}${tail}`);
+                }
+            });
         }
 
         this._startPolling();
