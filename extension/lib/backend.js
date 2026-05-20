@@ -20,7 +20,7 @@ export class Backend {
   start(onExit) {
     if (this._proc) return;
     const launcher = new Gio.SubprocessLauncher({
-      flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+      flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE,
     });
     launcher.setenv("GLANCE_PORT", String(this._port), true);
     launcher.setenv("GLANCE_HOST", this._host, true);
