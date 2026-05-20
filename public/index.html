@@ -30,19 +30,36 @@
     </div>
   </header>
 
-  <main class="grid">
+  <main class="grid" id="grid">
     <section class="col col-remote" data-col="remote">
-      <h2><span class="col-tag remote">REMOTE</span><span class="col-meta" id="remote-meta"></span></h2>
+      <h2>
+        <span class="col-tag remote">REMOTE</span>
+        <span class="col-meta" id="remote-meta"></span>
+        <button class="col-action" id="remote-add" title="add a peer">+</button>
+      </h2>
+      <form class="peer-add-form" id="peer-add-form" hidden>
+        <input type="text" name="name" placeholder="name" autocomplete="off" required>
+        <input type="text" name="host" placeholder="host or IP" autocomplete="off" required>
+        <input type="number" name="port" placeholder="port" min="1" max="65535" autocomplete="off">
+        <div class="peer-add-buttons">
+          <button type="submit" class="btn btn-sm">add</button>
+          <button type="button" class="btn btn-sm" id="peer-add-cancel">cancel</button>
+        </div>
+        <div class="peer-add-error" id="peer-add-error"></div>
+      </form>
       <div class="remote-grid" id="remote-grid">
         <div class="remote-empty">
           <div class="remote-empty-title">no peers configured</div>
           <div class="remote-empty-hint">
             Install <code>klarum-presence</code> on each machine in the tailnet.
-            <br>Peers will be auto-discovered via <code>tailscale status --json</code>.
+            <br>Peers will be auto-discovered via <code>tailscale status --json</code>,
+            or add a peer manually with the <code>+</code> button above.
           </div>
         </div>
       </div>
     </section>
+
+    <div class="col-gutter" data-gutter-after="remote"></div>
 
     <section class="col col-sessions" data-col="sessions">
       <h2><span class="col-tag sessions">SESSIONS</span><span class="col-meta" id="sessions-meta"></span></h2>
@@ -54,15 +71,21 @@
       </div>
     </section>
 
+    <div class="col-gutter" data-gutter-after="sessions"></div>
+
     <section class="col" data-col="inbox">
       <h2><span class="col-tag inbox">INBOX</span><span class="col-meta" id="inbox-meta"></span></h2>
       <ul class="list" id="inbox-list"></ul>
     </section>
 
+    <div class="col-gutter" data-gutter-after="inbox"></div>
+
     <section class="col" data-col="linear">
       <h2><span class="col-tag linear">LINEAR</span><span class="col-meta" id="linear-meta"></span></h2>
       <ul class="list" id="linear-list"></ul>
     </section>
+
+    <div class="col-gutter" data-gutter-after="linear"></div>
 
     <section class="col" data-col="calendar">
       <h2><span class="col-tag calendar">CALENDAR</span><span class="col-meta" id="calendar-meta"></span></h2>

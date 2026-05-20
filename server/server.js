@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 // glance — single-screen dashboard, localhost only.
 //
-//   GET  /                     index.html
-//   GET  /<static asset>       public/...
-//   GET  /api/state            aggregated snapshot
-//   GET  /api/health           { ok, version, platform }
-//   POST /api/refresh          invalidate caches, return new state
-//   POST /api/sync-linear      proxy to configured linear sync endpoint
-//   POST /api/open             body: { url } — open in default handler
+//   GET    /                          index.html
+//   GET    /<static asset>            public/...
+//   GET    /api/state                 aggregated snapshot
+//   GET    /api/health                { ok, version, platform }
+//   POST   /api/refresh               invalidate caches, return new state
+//   POST   /api/sync-linear           proxy to configured linear sync endpoint
+//   POST   /api/open                  body: { url } — open in default handler
+//   GET    /api/config/peers          list manually-configured remote peers
+//   POST   /api/config/peers          body: { name, host, port? } — add peer
+//   DELETE /api/config/peers/:name    remove peer
 //
 // Zero npm deps. Cross-platform via server/platform/{linux,macos,windows}.js.
 
@@ -17,12 +20,21 @@ const path        = require("path");
 const { spawn }   = require("child_process");
 const { execSync } = require("child_process");
 
-const platform = require("./platform");
-const cfg      = require("./config").load();
+const platform   = require("./platform");
+const configMod  = require("./config");
+let   cfg        = configMod.load();
 
 const PKG       = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const CAL_CACHE  = path.join(cfg.inboxDir, ".cal-cache.json");
+
+const PEER_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+// RFC1123 hostname (letters, digits, hyphens, dots; no leading/trailing hyphen
+// in any label) OR a plain IPv4 dotted-quad. IPv6 not validated here — would
+// need bracket-stripping + colon parsing; not worth the surface area for a
+// localhost-only admin UI.
+const HOSTNAME_RE = /^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+const IPV4_RE     = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -79,10 +91,10 @@ function gatherServices() {
   return out;
 }
 
-function fetchPresence(ip, timeoutMs = 1500) {
+function fetchPresence(ip, timeoutMs = 1500, port = cfg.presencePort) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: ip, port: cfg.presencePort, path: "/presence", timeout: timeoutMs },
+      { host: ip, port, path: "/presence", timeout: timeoutMs },
       r => {
         const chunks = [];
         r.on("data", c => chunks.push(c));
@@ -98,13 +110,39 @@ function fetchPresence(ip, timeoutMs = 1500) {
   });
 }
 
+async function gatherManualPeers() {
+  const list = Array.isArray(cfg.peers) ? cfg.peers : [];
+  if (!list.length) return [];
+  return Promise.all(list.map(async (p) => {
+    const port = Number(p.port) || cfg.presencePort;
+    const base = {
+      hostname: p.name,
+      ip:       p.host,
+      online:   false,
+      is_self:  false,
+      is_manual: true,
+      port,
+    };
+    try {
+      const snapshot = await fetchPresence(p.host, 1500, port);
+      return { ...base, online: true, snapshot };
+    } catch (e) {
+      return { ...base, snapshot: null, fetch_error: e.message };
+    }
+  }));
+}
+
 async function gatherRemote() {
+  const manualP = gatherManualPeers();
+
   let status;
   try {
     status = JSON.parse(
       execSync("tailscale status --json", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
     );
   } catch {
+    const manual = await manualP;
+    if (manual.length) return { status: "manual-only", peers: manual };
     try {
       const snap = await fetchPresence("127.0.0.1");
       return {
@@ -120,7 +158,7 @@ async function gatherRemote() {
   if (status.Self) nodes.push({ raw: status.Self, isSelf: true });
   for (const k of Object.keys(status.Peer || {})) nodes.push({ raw: status.Peer[k], isSelf: false });
 
-  const peers = await Promise.all(nodes.map(async n => {
+  const tsPeers = await Promise.all(nodes.map(async n => {
     const r = n.raw;
     const ip = (r.TailscaleIPs || [])[0];
     const base = {
@@ -138,6 +176,9 @@ async function gatherRemote() {
       return { ...base, snapshot: null, fetch_error: e.message };
     }
   }));
+
+  const manual = await manualP;
+  const peers = [...tsPeers, ...manual];
 
   peers.sort((a, b) => {
     if (a.is_self !== b.is_self) return a.is_self ? -1 : 1;
@@ -398,6 +439,63 @@ function actionSyncLinear() {
   });
 }
 
+function validPeerInput(body) {
+  if (!body || typeof body !== "object") return "missing body";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const host = typeof body.host === "string" ? body.host.trim() : "";
+  const port = body.port == null ? null : Number(body.port);
+
+  if (!name) return "name required";
+  if (!PEER_NAME_RE.test(name)) return "name must match [a-zA-Z0-9._-]";
+  if (!host) return "host required";
+  if (!HOSTNAME_RE.test(host) && !IPV4_RE.test(host)) return "host must be hostname or IPv4";
+  if (port != null && (!Number.isInteger(port) || port < 1 || port > 65535)) return "port must be 1..65535";
+
+  return { name, host, port: port == null ? null : port };
+}
+
+function actionAddPeer(body) {
+  const v = validPeerInput(body);
+  if (typeof v === "string") return { ok: false, error: v };
+
+  try {
+    cfg = configMod.mutate((current) => {
+      const list = Array.isArray(current.peers) ? current.peers.slice() : [];
+      if (list.some(p => p && p.name === v.name)) {
+        const err = new Error("peer name already exists");
+        err.statusCode = 409;
+        throw err;
+      }
+      const entry = { name: v.name, host: v.host };
+      if (v.port != null) entry.port = v.port;
+      list.push(entry);
+      return { ...current, peers: list };
+    });
+    return { ok: true, peers: cfg.peers };
+  } catch (e) {
+    return { ok: false, error: e.message, statusCode: e.statusCode || 500 };
+  }
+}
+
+function actionRemovePeer(name) {
+  if (!name || !PEER_NAME_RE.test(name)) return { ok: false, error: "invalid name", statusCode: 400 };
+  let found = false;
+  try {
+    cfg = configMod.mutate((current) => {
+      const list = Array.isArray(current.peers) ? current.peers : [];
+      const next = list.filter(p => {
+        if (p && p.name === name) { found = true; return false; }
+        return true;
+      });
+      return { ...current, peers: next };
+    });
+  } catch (e) {
+    return { ok: false, error: e.message, statusCode: 500 };
+  }
+  if (!found) return { ok: false, error: "peer not found", statusCode: 404 };
+  return { ok: true, peers: cfg.peers };
+}
+
 function actionOpen(url) {
   if (!url) return { ok: false, error: "missing url" };
   const opener =
@@ -432,6 +530,21 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/open") {
       const body = await readBody(req);
       return send(res, 200, actionOpen(body.url));
+    }
+    if (req.method === "GET" && req.url === "/api/config/peers") {
+      return send(res, 200, { peers: Array.isArray(cfg.peers) ? cfg.peers : [] });
+    }
+    if (req.method === "POST" && req.url === "/api/config/peers") {
+      const body = await readBody(req);
+      const r = actionAddPeer(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    {
+      const m = req.method === "DELETE" && req.url.match(/^\/api\/config\/peers\/([^/?#]+)$/);
+      if (m) {
+        const r = actionRemovePeer(decodeURIComponent(m[1]));
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
     }
     if (req.method === "GET") return serveStatic(req, res);
     send(res, 405, { error: "method not allowed" });

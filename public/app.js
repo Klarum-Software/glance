@@ -5,6 +5,19 @@ const REFRESH_MS = 30_000;
 const TODAY      = new Date().toISOString().slice(0, 10);
 const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
 
+const GUTTER_PX     = 6;
+const COL_MIN_PX    = 160;
+const COL_WIDTH_KEY = (name) => `glance.colwidth.${name}`;
+// Default fr values. Tuned to match the wider, more balanced original
+// glance-ui layout (see Screenshot 2 in the v0.1.0 handoff notes).
+const COL_DEFAULTS = {
+  remote:   3.4,
+  sessions: 1.6,
+  inbox:    0.9,
+  linear:   2.2,
+  calendar: 1.5,
+};
+
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...children) => {
   const n = document.createElement(tag);
@@ -101,15 +114,29 @@ function renderPeerRow(p) {
     el("span", { class: "peer-ip" }, p.ip || ""),
   );
 
+  const removeBtn = p.is_manual
+    ? el("button", {
+        class: "peer-remove",
+        title: "remove peer",
+        on: { click: (ev) => { ev.stopPropagation(); removePeer(p.hostname); } },
+      }, "×")
+    : null;
+
+  const cls = "peer-row" + (p.is_manual ? " manual" : "");
+
   if (!p.online) {
-    return el("div", { class: "peer-row offline" }, head,
-      el("div", { class: "peer-note" }, "offline · last seen " + fmtAgo(p.last_seen))
+    return el("div", { class: cls + " offline" }, head,
+      el("div", { class: "peer-note" }, p.is_manual && p.fetch_error
+        ? `unreachable · ${p.fetch_error}`
+        : "offline · last seen " + fmtAgo(p.last_seen)),
+      removeBtn,
     );
   }
   if (!p.snapshot) {
-    return el("div", { class: "peer-row stale" }, head,
+    return el("div", { class: cls + " stale" }, head,
       el("div", { class: "peer-note" },
-        p.fetch_error ? `presence agent: ${p.fetch_error}` : "no presence agent on :5176")
+        p.fetch_error ? `presence agent: ${p.fetch_error}` : "no presence agent on :5176"),
+      removeBtn,
     );
   }
   const s = p.snapshot;
@@ -120,7 +147,7 @@ function renderPeerRow(p) {
   const topCpu = s.top_cpu ? `${s.top_cpu.name} ${Math.round(s.top_cpu.pct)}%` : "—";
   const topMem = s.top_mem ? `${s.top_mem.name} ${Math.round(s.top_mem.pct)}%` : "—";
 
-  return el("div", { class: "peer-row" + (p.is_self ? " self" : "") },
+  return el("div", { class: cls + (p.is_self ? " self" : "") },
     head,
     el("div", { class: "peer-grid" },
       el("div", { class: "peer-cell" },
@@ -144,6 +171,7 @@ function renderPeerRow(p) {
         el("span", { class: "peer-val claude-procs" }, `${s.claude_procs || 0} running`),
       ),
     ),
+    removeBtn,
   );
 }
 
@@ -373,6 +401,158 @@ function render(state) {
   renderCalendar(state.calendar);
 }
 
+// ── resizable columns ─────────────────────────────────────────────────────
+
+function getColEls() {
+  return Array.from(document.querySelectorAll(".grid > .col"));
+}
+
+function loadColFr(name) {
+  const raw = localStorage.getItem(COL_WIDTH_KEY(name));
+  if (raw == null) return COL_DEFAULTS[name] ?? 1;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : (COL_DEFAULTS[name] ?? 1);
+}
+
+function saveColFr(name, fr) {
+  localStorage.setItem(COL_WIDTH_KEY(name), String(fr));
+}
+
+function applyGridTemplate() {
+  const grid = $("grid");
+  if (!grid) return;
+  const parts = [];
+  const children = Array.from(grid.children);
+  for (const el of children) {
+    if (el.classList.contains("col")) {
+      const name = el.dataset.col;
+      parts.push(`minmax(${COL_MIN_PX}px, ${loadColFr(name)}fr)`);
+    } else if (el.classList.contains("col-gutter")) {
+      parts.push(`${GUTTER_PX}px`);
+    }
+  }
+  grid.style.gridTemplateColumns = parts.join(" ");
+}
+
+// Drag a gutter: compute the px delta, convert to fr delta using the ratio
+// of total fr-units to total fr-track-width, then redistribute between the
+// two adjacent columns. Clamps to COL_MIN_PX on both sides.
+function startGutterDrag(gutter, startEvent) {
+  startEvent.preventDefault();
+  const grid = $("grid");
+  const left  = gutter.previousElementSibling;
+  const right = gutter.nextElementSibling;
+  if (!left || !right || !left.classList.contains("col") || !right.classList.contains("col")) return;
+
+  const leftName  = left.dataset.col;
+  const rightName = right.dataset.col;
+  const startX    = startEvent.clientX;
+  const leftFr0   = loadColFr(leftName);
+  const rightFr0  = loadColFr(rightName);
+  const leftPx0   = left.getBoundingClientRect().width;
+  const rightPx0  = right.getBoundingClientRect().width;
+  const pxPerFr   = (leftPx0 + rightPx0) / (leftFr0 + rightFr0);
+
+  gutter.classList.add("dragging");
+  document.body.classList.add("col-resizing");
+
+  function onMove(ev) {
+    let dx = ev.clientX - startX;
+    const leftPx  = leftPx0  + dx;
+    const rightPx = rightPx0 - dx;
+    if (leftPx  < COL_MIN_PX) dx = COL_MIN_PX - leftPx0;
+    if (rightPx < COL_MIN_PX) dx = rightPx0 - COL_MIN_PX;
+    const dFr = dx / pxPerFr;
+    const leftFr  = Math.max(0.05, leftFr0  + dFr);
+    const rightFr = Math.max(0.05, rightFr0 - dFr);
+    saveColFr(leftName,  leftFr);
+    saveColFr(rightName, rightFr);
+    applyGridTemplate();
+  }
+  function onUp() {
+    gutter.classList.remove("dragging");
+    document.body.classList.remove("col-resizing");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup",   onUp);
+  }
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup",   onUp);
+}
+
+function initResizableColumns() {
+  applyGridTemplate();
+  for (const g of document.querySelectorAll(".col-gutter")) {
+    g.addEventListener("mousedown", (e) => startGutterDrag(g, e));
+    g.addEventListener("dblclick", () => {
+      const left  = g.previousElementSibling;
+      const right = g.nextElementSibling;
+      if (left  && left.classList.contains("col"))  saveColFr(left.dataset.col,  COL_DEFAULTS[left.dataset.col]  ?? 1);
+      if (right && right.classList.contains("col")) saveColFr(right.dataset.col, COL_DEFAULTS[right.dataset.col] ?? 1);
+      applyGridTemplate();
+    });
+  }
+}
+
+// ── peer add/remove UI ────────────────────────────────────────────────────
+
+function showPeerForm(show) {
+  const form = $("peer-add-form");
+  if (!form) return;
+  form.hidden = !show;
+  $("peer-add-error").textContent = "";
+  if (show) {
+    form.reset();
+    form.querySelector('input[name="name"]').focus();
+  }
+}
+
+async function submitAddPeer(ev) {
+  ev.preventDefault();
+  const form = ev.target;
+  const data = new FormData(form);
+  const body = {
+    name: (data.get("name") || "").toString().trim(),
+    host: (data.get("host") || "").toString().trim(),
+  };
+  const portRaw = (data.get("port") || "").toString().trim();
+  if (portRaw) body.port = Number(portRaw);
+
+  try {
+    const r = await fetch("/api/config/peers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      $("peer-add-error").textContent = j.error || `error ${r.status}`;
+      return;
+    }
+    showPeerForm(false);
+    toast(`added ${body.name}`);
+    reload();
+  } catch (e) {
+    $("peer-add-error").textContent = e.message;
+  }
+}
+
+async function removePeer(name) {
+  if (!name) return;
+  if (!confirm(`Remove peer "${name}"?`)) return;
+  try {
+    const r = await fetch("/api/config/peers/" + encodeURIComponent(name), { method: "DELETE" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      toast(`remove failed: ${j.error || r.status}`, 3000);
+      return;
+    }
+    toast(`removed ${name}`);
+    reload();
+  } catch (e) {
+    toast(`remove failed: ${e.message}`, 3000);
+  }
+}
+
 // ── action wiring ─────────────────────────────────────────────────────────
 
 async function runAction(action) {
@@ -400,6 +580,15 @@ async function runAction(action) {
 for (const btn of document.querySelectorAll(".btn[data-action]")) {
   btn.addEventListener("click", () => runAction(btn.dataset.action));
 }
+
+document.getElementById("remote-add")?.addEventListener("click", () => {
+  const form = $("peer-add-form");
+  showPeerForm(form.hidden);
+});
+document.getElementById("peer-add-form")?.addEventListener("submit", submitAddPeer);
+document.getElementById("peer-add-cancel")?.addEventListener("click", () => showPeerForm(false));
+
+initResizableColumns();
 
 // ── main loop ─────────────────────────────────────────────────────────────
 

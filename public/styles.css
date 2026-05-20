@@ -135,14 +135,15 @@ html, body {
   line-height: 1;
 }
 
-/* ── 5-column grid ─────────────────────────────────────────────────────── */
+/* ── resizable column grid ─────────────────────────────────────────────── */
 
+/* Column tracks are interleaved with 6px gutter tracks. The template is set
+   inline by app.js from grid-template-columns built off the .col fr values
+   (persisted to localStorage) and a fixed 6px per gutter. */
 .grid {
   display: grid;
-  grid-template-columns: 2.8fr 1.6fr 0.9fr 2fr 1.4fr;
   height: calc(100vh - 36px);
-  gap: 1px;
-  background: var(--border);
+  background: var(--bg);
 }
 
 .col {
@@ -151,8 +152,27 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
+
+.col-gutter {
+  background: var(--border);
+  cursor: col-resize;
+  position: relative;
+  transition: background 0.1s;
+}
+.col-gutter:hover,
+.col-gutter.dragging { background: #3a3f48; }
+/* widen the hit-area without widening the visible track */
+.col-gutter::before {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+  z-index: 1;
+}
+body.col-resizing { cursor: col-resize; user-select: none; }
+body.col-resizing * { cursor: col-resize !important; }
 
 .col h2 {
   display: flex;
@@ -163,6 +183,29 @@ html, body {
   margin: 0 0 4px;
   letter-spacing: 0.08em;
 }
+
+.col-action {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  align-self: center;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.col-action:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: #3a3f48;
+}
+.col-action:active { transform: translateY(1px); }
 .col-tag {
   text-transform: uppercase;
 }
@@ -244,6 +287,44 @@ html, body {
 }
 
 /* peer rows */
+.peer-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 2px 6px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.peer-add-form input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+.peer-add-form input:focus {
+  border-color: var(--accent);
+}
+.peer-add-form input[name="port"] { width: 70px; }
+.peer-add-buttons {
+  display: flex;
+  gap: 6px;
+}
+.btn.btn-sm {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+.peer-add-error {
+  font-size: 10px;
+  color: var(--bad);
+  min-height: 12px;
+}
+
 .peer-row {
   display: flex;
   flex-direction: column;
@@ -253,6 +334,31 @@ html, body {
   border-left: 2px solid var(--remote);
   background: rgba(78, 201, 176, 0.04);
   border-radius: 3px;
+  position: relative;
+}
+.peer-row.manual { border-left-style: dashed; }
+.peer-remove {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  opacity: 0.6;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+.peer-remove:hover {
+  opacity: 1;
+  color: var(--bad);
+  background: var(--surface-2);
 }
 .peer-row.self    { border-left-color: var(--accent); background: rgba(110, 168, 255, 0.05); }
 .peer-row.offline { border-left-color: var(--muted); background: transparent; opacity: 0.55; }

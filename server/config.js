@@ -21,6 +21,9 @@ const DEFAULTS = {
   presencePort: 5176,
   // me_emails: used for filtering Linear cache to "issues assigned to me"
   meEmails: [],
+  // manually-configured remote peers, added via the REMOTE column "+" button.
+  // shown alongside tailscale-discovered peers. each item: { name, host, port? }
+  peers: [],
 };
 
 function load() {
@@ -42,4 +45,24 @@ function load() {
   return { ...DEFAULTS, ...user, ...env };
 }
 
-module.exports = { load, CONFIG_DIR, CONFIG_FILE, DEFAULTS };
+// Atomic read-modify-write of the JSON config file. The mutator receives the
+// current on-disk object (or {} if missing) and returns a new object to write.
+// Writes go to a sibling tmpfile + rename so a crash mid-write can't corrupt
+// the file. Returns the merged-with-defaults loaded config.
+function mutate(mutator) {
+  let current = {};
+  try {
+    current = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  } catch { /* file missing or unparseable — start from {} */ }
+
+  const next = mutator(current) || current;
+
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); } catch {}
+  const tmp = CONFIG_FILE + ".tmp-" + process.pid + "-" + Date.now();
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, CONFIG_FILE);
+
+  return load();
+}
+
+module.exports = { load, mutate, CONFIG_DIR, CONFIG_FILE, DEFAULTS };
