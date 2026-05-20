@@ -25,6 +25,7 @@ class GlanceIndicator extends PanelMenu.Button {
         this._settings  = extension.getSettings();
         this._state     = null;
         this._refreshTimer = 0;
+        this._handlerIds   = [];
 
         // ── panel button ────────────────────────────────────────────────
         const box = new St.BoxLayout({
@@ -73,9 +74,9 @@ class GlanceIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(item);
 
         // Resize the menu dynamically when opened.
-        this.menu.connect("open-state-changed", (_m, open) => {
+        this._handlerIds.push([this.menu, this.menu.connect("open-state-changed", (_m, open) => {
             if (open) this._onOpen();
-        });
+        })]);
 
         // ── backend ─────────────────────────────────────────────────────
         const port = this._settings.get_int("backend-port");
@@ -167,6 +168,10 @@ class GlanceIndicator extends PanelMenu.Button {
             GLib.source_remove(this._refreshTimer);
             this._refreshTimer = 0;
         }
+        for (const [obj, id] of this._handlerIds) {
+            try { obj.disconnect(id); } catch (_) {}
+        }
+        this._handlerIds.length = 0;
         if (this._backend && this._extension._settings.get_boolean("auto-start-backend")) {
             this._backend.stop();
         }
