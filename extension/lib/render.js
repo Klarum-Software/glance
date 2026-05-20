@@ -12,7 +12,7 @@ export function renderDashboard(parent, state, opts = {}) {
     parent.add_child(makeTopbar(state));
 
     const body = new St.BoxLayout({
-        orientation: Clutter.Orientation.HORIZONTAL,
+        vertical: false,
         style_class: "glance-body",
         x_expand: true,
         y_expand: true,
@@ -30,12 +30,12 @@ export function renderDashboard(parent, state, opts = {}) {
 
 function makeTopbar(state) {
     const bar = new St.BoxLayout({
-        orientation: Clutter.Orientation.HORIZONTAL,
+        vertical: false,
         style_class: "glance-topbar",
         x_expand: true,
     });
 
-    const brand = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-brand" });
+    const brand = new St.BoxLayout({ vertical: false, style_class: "glance-brand" });
     brand.add_child(new St.Widget({ style_class: "glance-brand-dot", y_align: Clutter.ActorAlign.CENTER }));
     brand.add_child(new St.Label({ text: "klarum glance", style_class: "glance-brand-name", y_align: Clutter.ActorAlign.CENTER }));
     brand.add_child(new St.Label({ text: fmt.fmtClock(state.now), style_class: "glance-brand-time", y_align: Clutter.ActorAlign.CENTER }));
@@ -44,10 +44,10 @@ function makeTopbar(state) {
     const spacer = new St.Widget({ x_expand: true });
     bar.add_child(spacer);
 
-    const svcs = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-services" });
+    const svcs = new St.BoxLayout({ vertical: false, style_class: "glance-services" });
     for (const [name, status] of Object.entries(state.services || {})) {
         const cls = "glance-svc " + (status === "active" ? "active" : "inactive");
-        const item = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: cls });
+        const item = new St.BoxLayout({ vertical: false, style_class: cls });
         item.add_child(new St.Widget({ style_class: "glance-svc-dot", y_align: Clutter.ActorAlign.CENTER }));
         item.add_child(new St.Label({ text: name, y_align: Clutter.ActorAlign.CENTER }));
         svcs.add_child(item);
@@ -61,13 +61,13 @@ function makeTopbar(state) {
 
 function makeColumn(label, tagClass, content) {
     const col = new St.BoxLayout({
-        orientation: Clutter.Orientation.VERTICAL,
+        vertical: true,
         style_class: "glance-col",
         x_expand: true,
         y_expand: true,
     });
 
-    const head = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-col-head" });
+    const head = new St.BoxLayout({ vertical: false, style_class: "glance-col-head" });
     head.add_child(new St.Label({ text: label, style_class: `glance-col-tag tag-${tagClass}` }));
     if (content.meta) head.add_child(new St.Label({ text: " " + content.meta, style_class: "glance-col-meta" }));
     col.add_child(head);
@@ -79,7 +79,7 @@ function makeColumn(label, tagClass, content) {
         hscrollbar_policy: St.PolicyType.NEVER,
         vscrollbar_policy: St.PolicyType.AUTOMATIC,
     });
-    const inner = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: "glance-col-body", x_expand: true });
+    const inner = new St.BoxLayout({ vertical: true, style_class: "glance-col-body", x_expand: true });
     for (const child of content.children) inner.add_child(child);
     scroll.set_child(inner);
     col.add_child(scroll);
@@ -113,8 +113,8 @@ function renderRemote(remote) {
     }
     const online = remote.peers.filter(p => p.online).length;
     for (const p of remote.peers) {
-        const row = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: "glance-peer" + (p.is_self ? " self" : (p.online ? "" : " offline")) });
-        const head = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-peer-head" });
+        const row = new St.BoxLayout({ vertical: true, style_class: "glance-peer" + (p.is_self ? " self" : (p.online ? "" : " offline")) });
+        const head = new St.BoxLayout({ vertical: false, style_class: "glance-peer-head" });
         head.add_child(new St.Widget({ style_class: "glance-peer-dot " + (p.online ? "online" : "offline"), y_align: Clutter.ActorAlign.CENTER }));
         head.add_child(new St.Label({ text: p.hostname + (p.is_self ? " (this)" : ""), style_class: "glance-peer-name", y_align: Clutter.ActorAlign.CENTER }));
         if (p.os)  head.add_child(new St.Label({ text: " " + p.os, style_class: "glance-peer-os", y_align: Clutter.ActorAlign.CENTER }));
@@ -148,8 +148,8 @@ function renderSessions(state) {
         return { meta, children };
     }
     for (const s of sessions) {
-        const row = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: "glance-session" + (s.worktree ? " worktree" : "") });
-        const head = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-session-head" });
+        const row = new St.BoxLayout({ vertical: true, style_class: "glance-session" + (s.worktree ? " worktree" : "") });
+        const head = new St.BoxLayout({ vertical: false, style_class: "glance-session-head" });
         const label = s.cwd_short
             ? (s.project ? `${s.project}  ${s.cwd_short.split("/").slice(-1)[0]}` : s.cwd_short)
             : `pid ${s.pid}`;
@@ -175,7 +175,7 @@ function renderLinear(lin, opts) {
         return { meta: `· ${lin.total || 0} open · ${lin.overdue || 0} overdue`, children };
     }
     for (const i of lin.items) {
-        const row = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-li" });
+        const row = new St.BoxLayout({ vertical: false, style_class: "glance-li" });
         row.add_child(new St.Label({ text: i.identifier, style_class: "glance-li-id", y_align: Clutter.ActorAlign.CENTER }));
         const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
         const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";
@@ -220,7 +220,7 @@ function renderCalendar(cal) {
         const label = day === TODAY ? "today" : day === TOMORROW ? "tomorrow" : day;
         children.push(new St.Label({ text: label, style_class: "glance-cal-day" }));
         for (const ev of evs) {
-            const row = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL, style_class: "glance-cal-event" });
+            const row = new St.BoxLayout({ vertical: false, style_class: "glance-cal-event" });
             const time = ev.start.length >= 16 ? ev.start.slice(11, 16) : "all day";
             row.add_child(new St.Label({ text: time, style_class: "glance-cal-time", y_align: Clutter.ActorAlign.CENTER }));
             row.add_child(new St.Label({ text: ev.summary, style_class: "glance-cal-summary", y_align: Clutter.ActorAlign.CENTER, x_expand: true }));
