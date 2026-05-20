@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+*.swp
+.vscode/
+.idea/
+dist/
+build/
+*.zip
+.cal-cache.json
+.linear-cache/
+.glance.pid
+.glance.sock

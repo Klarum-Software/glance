@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>klarum glance</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">klarum glance</span>
+      <span class="brand-time" id="clock">—</span>
+    </div>
+
+    <div class="services" id="services" title="systemd-user service status">
+      <span class="svc" data-svc="orch"><i></i>orch</span>
+      <span class="svc" data-svc="inbox"><i></i>inbox</span>
+      <span class="svc" data-svc="tmux"><i></i>tmux</span>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-claude" data-action="launch-claude" title="Launch new claude session in ~/repos/noah-tools">
+        <span class="btn-claude-icon">▸</span>claude
+      </button>
+      <button class="btn" data-action="refresh">Refresh</button>
+      <button class="btn" data-action="sync-linear">Sync Linear</button>
+      <a class="btn btn-link" href="http://127.0.0.1:5174" target="_blank" rel="noopener">Inbox UI</a>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="col col-remote" data-col="remote">
+      <h2><span class="col-tag remote">REMOTE</span><span class="col-meta" id="remote-meta"></span></h2>
+      <div class="remote-grid" id="remote-grid">
+        <div class="remote-empty">
+          <div class="remote-empty-title">no peers configured</div>
+          <div class="remote-empty-hint">
+            Install <code>klarum-presence</code> on each machine in the tailnet.
+            <br>Peers will be auto-discovered via <code>tailscale status --json</code>.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="col col-sessions" data-col="sessions">
+      <h2><span class="col-tag sessions">SESSIONS</span><span class="col-meta" id="sessions-meta"></span></h2>
+      <div class="sessions-body">
+        <div class="ram-bar" id="ram-bar" title="system RAM">
+          <div class="ram-bar-segs" id="ram-bar-segs"></div>
+        </div>
+        <div class="sessions-list" id="sessions-list"></div>
+      </div>
+    </section>
+
+    <section class="col" data-col="inbox">
+      <h2><span class="col-tag inbox">INBOX</span><span class="col-meta" id="inbox-meta"></span></h2>
+      <ul class="list" id="inbox-list"></ul>
+    </section>
+
+    <section class="col" data-col="linear">
+      <h2><span class="col-tag linear">LINEAR</span><span class="col-meta" id="linear-meta"></span></h2>
+      <ul class="list" id="linear-list"></ul>
+    </section>
+
+    <section class="col" data-col="calendar">
+      <h2><span class="col-tag calendar">CALENDAR</span><span class="col-meta" id="calendar-meta"></span></h2>
+      <ul class="list" id="calendar-list"></ul>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

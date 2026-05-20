@@ -1,0 +1,24 @@
+{
+  "name": "glance",
+  "version": "0.1.0",
+  "description": "Single-screen dashboard for Klarum operators — GNOME extension + cross-platform browser fallback.",
+  "main": "server/server.js",
+  "bin": {
+    "glance": "server/server.js"
+  },
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js",
+    "test": "node scripts/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/klarum-software/glance.git"
+  },
+  "keywords": ["dashboard", "gnome-extension", "tailscale", "linear", "claude"],
+  "author": "Klarum Software",
+  "license": "MIT"
+}
