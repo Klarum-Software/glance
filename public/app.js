@@ -268,32 +268,6 @@ function renderSessions(state) {
   );
 }
 
-function renderInbox(drafts) {
-  const list = $("inbox-list");
-  list.replaceChildren();
-  if (!drafts.length) {
-    list.appendChild(el("li", { class: "empty" }, "no drafts"));
-    $("inbox-meta").textContent = "";
-    return;
-  }
-  const todayN = drafts.filter(d => d.day === TODAY).length;
-  $("inbox-meta").textContent = `· ${todayN} today · ${drafts.length - todayN} older`;
-  for (const d of drafts) {
-    list.appendChild(
-      el("li", {
-        class: "clickable",
-        title: d.path,
-        on: { click: () => postAction("/api/open", { url: "file://" + d.path }).then(() => toast(`opened ${d.id}`)) },
-      },
-        el("span", { class: "draft-flag " + (d.has_noah_markers ? "warn" : "ok") },
-           d.has_noah_markers ? "⚑" : "✓"),
-        el("span", { class: "draft-id" }, d.id),
-        el("span", { class: "draft-day" }, d.day.slice(5)),
-      )
-    );
-  }
-}
-
 function renderLinear(lin) {
   const list = $("linear-list");
   list.replaceChildren();
@@ -368,7 +342,6 @@ function render(state) {
   renderServices(state.services || {});
   renderRemote(state.remote);
   renderSessions(state);
-  renderInbox(state.drafts);
   renderLinear(state.linear);
   renderCalendar(state.calendar);
 }

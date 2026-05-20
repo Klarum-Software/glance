@@ -58,7 +58,6 @@ async function main() {
     console.log("state: ", s.status, "platform=" + (s.json?.platform || "?"),
                 "services=" + JSON.stringify(s.json?.services || {}),
                 "sessions=" + (s.json?.sessions?.length ?? "?"),
-                "drafts=" + (s.json?.drafts?.length ?? "?"),
                 "linear=" + (s.json?.linear?.total ?? "?"));
     if (s.status !== 200) failed++;
   } catch (e) {

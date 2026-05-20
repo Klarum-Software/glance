@@ -25,10 +25,9 @@
               ▼                   ▼                    ▼
    ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐
    │ Tailscale       │  │ Filesystem      │  │ Local services   │
-   │ • peer list     │  │ • claude-inbox/ │  │ • configured     │
-   │ • presence:5176 │  │ • linear cache  │  │   service status │
-   └─────────────────┘  │ • calendar      │  └──────────────────┘
-                        │   cache.json    │
+   │ • peer list     │  │ • linear cache  │  │ • configured     │
+   │ • presence:5176 │  │ • calendar      │  │   service status │
+   └─────────────────┘  │   cache.json    │  └──────────────────┘
                         └─────────────────┘
 ```
 
@@ -76,14 +75,14 @@ extension/
     ├── api.js          # Soup3 HTTP client
     ├── backend.js      # spawn/stop Node.js subprocess
     ├── format.js       # bytes/uptime/clock helpers
-    └── render.js       # St widget construction for the 5-column dashboard
+    └── render.js       # St widget construction for the 4-column dashboard
 ```
 
 ## Threading / lifecycle
 
 - Extension enables → spawns backend via `Gio.SubprocessLauncher`
 - Extension polls `/api/state` every `refresh-interval` seconds (default 30)
-- Panel button shows compact summary: `P1·n  !overdue  ⚑drafts  ▸sessions`
+- Panel button shows compact summary: `P1·n  !overdue  ▸sessions`
 - Click → menu opens, dashboard renders in St widgets, sized to
   `dropdown-width-pct` of primary monitor
 - Extension disables → SIGTERM to backend, fallback `force_exit` after 1.5s

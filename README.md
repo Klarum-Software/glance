@@ -1,7 +1,7 @@
 # glance
 
 Single-screen, ambient-glance operator dashboard. Shows you at a glance:
-tailnet peers, local claude sessions, draft inbox, Linear queue, and calendar.
+tailnet peers, local claude sessions, Linear queue, and calendar.
 
 Comes in two forms:
 
@@ -61,7 +61,6 @@ Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
 |----------|-------------------------------------------|
 | REMOTE   | `tailscale status --json` + `klarum-presence` agent on each peer (port 5176) |
 | SESSIONS | `ps`-derived `claude` process trees + RSS vs total RAM |
-| INBOX    | `<inboxDir>/YYYY-MM-DD/issue-*/draft.md` |
 | LINEAR   | `<inboxDir>/.linear-cache/*.json`         |
 | CALENDAR | `calendarBin` stdout (refreshed every 60s)|
 

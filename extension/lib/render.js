@@ -1,5 +1,5 @@
 // Render the dashboard state into a parent St.BoxLayout (vertical).
-// Layout: [ topbar ]  [ 5-column body ]
+// Layout: [ topbar ]  [ 4-column body ]
 
 import Clutter from "gi://Clutter";
 import St      from "gi://St";
@@ -20,7 +20,6 @@ export function renderDashboard(parent, state, opts = {}) {
 
     body.add_child(makeColumn("REMOTE",   "remote",   renderRemote(state.remote)));
     body.add_child(makeColumn("SESSIONS", "sessions", renderSessions(state)));
-    body.add_child(makeColumn("INBOX",    "inbox",    renderInbox(state.drafts || [], opts)));
     body.add_child(makeColumn("LINEAR",   "linear",   renderLinear(state.linear || { items: [] }, opts)));
     body.add_child(makeColumn("CALENDAR", "calendar", renderCalendar(state.calendar || { events: [] })));
 
@@ -165,30 +164,6 @@ function renderSessions(state) {
         children.push(row);
     }
     return { meta, children };
-}
-
-// ── INBOX ───────────────────────────────────────────────────────────────
-
-function renderInbox(drafts, opts) {
-    const children = [];
-    if (!drafts.length) {
-        children.push(emptyRow("no drafts"));
-        return { meta: "", children };
-    }
-    const TODAY = fmt.today();
-    const todayN = drafts.filter(d => d.day === TODAY).length;
-    for (const d of drafts) {
-        const row = new St.BoxLayout({ vertical: false, style_class: "glance-draft" });
-        row.add_child(new St.Label({
-            text: d.has_noah_markers ? "⚑" : "✓",
-            style_class: "glance-draft-flag " + (d.has_noah_markers ? "warn" : "ok"),
-            y_align: Clutter.ActorAlign.CENTER,
-        }));
-        row.add_child(new St.Label({ text: d.id, style_class: "glance-draft-id", y_align: Clutter.ActorAlign.CENTER, x_expand: true }));
-        row.add_child(new St.Label({ text: d.day.slice(5), style_class: "glance-draft-day", y_align: Clutter.ActorAlign.CENTER }));
-        children.push(clickableRow(row, () => opts.onOpenUrl && opts.onOpenUrl("file://" + d.path)));
-    }
-    return { meta: `· ${todayN} today · ${drafts.length - todayN} older`, children };
 }
 
 // ── LINEAR ──────────────────────────────────────────────────────────────
