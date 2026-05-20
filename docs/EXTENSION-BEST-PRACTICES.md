@@ -65,6 +65,10 @@ dbus-run-session    gnome-shell --devkit  --wayland  # GNOME 49+
 
 [gjs.guide/extensions/development/debugging](https://gjs.guide/extensions/development/debugging.html)
 
+For day-to-day iteration, use `scripts/dev-shell.sh`. It wraps both flag
+spellings, runs the install, drives the nested shell over a dedicated bus,
+and reaps orphans on exit. See `docs/TESTING.md` Layer 3.
+
 **glance status.** `docs/CONTRIBUTING.md:38-46` already documents this
 correctly.
 
