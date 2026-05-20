@@ -1,19 +1,13 @@
 # glance
 
-Single-screen, ambient-glance operator dashboard. Shows you at a glance:
-tailnet peers, local claude sessions, Linear queue, and calendar.
+GNOME Shell extension. Adds a top-panel button that drops down a single-screen
+operator dashboard: tailnet peers, local claude sessions, Linear queue, and
+calendar.
 
-Comes in two forms:
+The extension spawns and supervises a small Node.js backend on
+`127.0.0.1:5175`. There is nothing to autostart.
 
-1. **GNOME extension** — recommended on Ubuntu/Fedora/Arch. Adds a top-panel
-   button that drops down the full dashboard. The extension manages the
-   backend lifecycle, so there is nothing to autostart.
-2. **Cross-platform browser fallback** — runs the same backend on any OS
-   (Linux/macOS/Windows) and renders the dashboard at <http://127.0.0.1:5175/>.
-
-## Quick start
-
-### Ubuntu / GNOME (recommended)
+## Install
 
 ```bash
 git clone https://github.com/klarum-software/glance.git ~/repos/glance
@@ -21,20 +15,14 @@ cd ~/repos/glance
 ./install/install.sh
 ```
 
-Then open GNOME Extensions and toggle on **glance**. A small dot appears in
-the top panel; click it for the dashboard.
-
-### macOS / Windows / non-GNOME Linux
+Log out and back in (Wayland requires a session restart to load new
+extensions), then:
 
 ```bash
-git clone https://github.com/klarum-software/glance.git
-cd glance
-npm start
+gnome-extensions enable glance@klarum-software.github.io
 ```
 
-Open <http://127.0.0.1:5175/> in a browser. To autostart at login on macOS,
-copy `install/com.klarum.glance.plist` into `~/Library/LaunchAgents/` and
-`launchctl load` it. On Windows, see `install/install-windows.ps1`.
+A dot appears in the top panel. Click it for the dashboard.
 
 ## Configuration
 
@@ -68,18 +56,18 @@ Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
 
 ```
 glance/
-├── server/              Node.js backend (~600 lines, zero deps)
-│   ├── server.js          HTTP + state aggregation + actions
-│   ├── config.js          ~/.config/glance/config.json loader
-│   └── platform/          OS adapters (linux/macos/windows)
-├── extension/           GNOME extension (GJS)
-├── public/              Browser fallback dashboard
-├── install/             Installers per OS
-└── docs/                ARCHITECTURE, INSTALL, CONTRIBUTING
+├── extension/            GNOME extension (GJS)
+├── server/               Node.js backend (~600 lines, zero deps)
+│   ├── server.js           HTTP + state aggregation + actions
+│   ├── config.js           ~/.config/glance/config.json loader
+│   └── platform/           OS adapters
+├── public/               Browser dashboard (used by the backend for dev)
+├── install/              Installer
+└── docs/                 ARCHITECTURE, INSTALL, CONTRIBUTING
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
