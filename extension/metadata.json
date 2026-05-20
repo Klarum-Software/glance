@@ -3,7 +3,7 @@
   "name": "Glance",
   "description": "Single-screen operator dashboard — tailnet peers, claude sessions, Linear queue, calendar.",
   "version": 1,
-  "shell-version": ["45", "46", "47", "48"],
+  "shell-version": ["46", "47", "48"],
   "url": "https://github.com/klarum-software/glance",
   "settings-schema": "org.gnome.shell.extensions.glance"
 }
