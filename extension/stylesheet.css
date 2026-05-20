@@ -1,0 +1,204 @@
+/* glance extension stylesheet — Pivi design language inside gnome-shell. */
+
+.glance-panel { spacing: 6px; }
+.glance-panel-label {
+    font-size: 11px;
+    color: #e1e3e8;
+    font-feature-settings: "tnum";
+}
+.glance-dot {
+    color: #6ea8ff;
+    icon-size: 14px;
+}
+.glance-dot.online { color: #5fc26d; }
+.glance-dot.offline { color: #82868f; }
+.glance-dot.warn { color: #ff5f56; }
+
+/* ── dropdown menu container ───────────────────────────────────────── */
+
+.glance-menu {
+    background-color: #0d0f12;
+    border: 1px solid #262a31;
+    border-radius: 6px;
+    padding: 0;
+    color: #e1e3e8;
+}
+.glance-menu-item { padding: 0; }
+.glance-menu-item:hover, .glance-menu-item:focus, .glance-menu-item:active { background: transparent; }
+
+.glance-dashboard {
+    spacing: 0;
+}
+
+.glance-placeholder {
+    color: #82868f;
+    font-style: italic;
+    padding: 24px;
+    text-align: center;
+}
+.glance-error {
+    color: #ff5f56;
+    padding: 20px;
+    text-align: center;
+    font-size: 12px;
+}
+
+/* ── topbar ─────────────────────────────────────────────────────────── */
+
+.glance-topbar {
+    background-color: #15181d;
+    border-bottom: 1px solid #262a31;
+    padding: 6px 12px;
+    spacing: 16px;
+    min-height: 28px;
+}
+.glance-brand { spacing: 8px; }
+.glance-brand-dot {
+    width: 8px; height: 8px;
+    background-color: #6ea8ff;
+    border-radius: 4px;
+}
+.glance-brand-name {
+    color: #e1e3e8;
+    font-weight: bold;
+    font-size: 12px;
+}
+.glance-brand-time {
+    color: #82868f;
+    font-size: 11px;
+    font-feature-settings: "tnum";
+    padding-left: 8px;
+}
+.glance-services { spacing: 10px; }
+.glance-svc {
+    spacing: 4px;
+    color: #82868f;
+    font-size: 11px;
+}
+.glance-svc-dot {
+    width: 7px; height: 7px;
+    border-radius: 4px;
+    background-color: #82868f;
+}
+.glance-svc.active { color: #e1e3e8; }
+.glance-svc.active .glance-svc-dot {
+    background-color: #5fc26d;
+    box-shadow: 0 0 6px #5fc26d;
+}
+.glance-svc.inactive .glance-svc-dot { background-color: #ff5f56; }
+
+/* ── columns ────────────────────────────────────────────────────────── */
+
+.glance-body {
+    background-color: #262a31;
+    spacing: 1px;
+    padding: 0;
+}
+.glance-col {
+    background-color: #0d0f12;
+    padding: 6px 10px 8px;
+    min-width: 180px;
+}
+.glance-col-head { spacing: 6px; padding-bottom: 4px; }
+.glance-col-tag {
+    font-size: 11px;
+    font-weight: bold;
+}
+.glance-col-tag.tag-remote   { color: #4ec9b0; }
+.glance-col-tag.tag-sessions { color: #ff8a65; }
+.glance-col-tag.tag-inbox    { color: #c586c0; }
+.glance-col-tag.tag-linear   { color: #f2c94c; }
+.glance-col-tag.tag-calendar { color: #6cc04a; }
+.glance-col-meta {
+    color: #82868f;
+    font-size: 10px;
+}
+.glance-col-scroll { }
+.glance-col-body { spacing: 2px; }
+
+.glance-empty {
+    color: #82868f;
+    font-style: italic;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+
+/* ── clickable rows ─────────────────────────────────────────────────── */
+
+.glance-row-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 3px;
+}
+.glance-row-btn:hover { background-color: #1c1f25; }
+
+/* ── peers ──────────────────────────────────────────────────────────── */
+
+.glance-peer {
+    padding: 5px 8px;
+    border-left: 2px solid #4ec9b0;
+    background-color: rgba(78, 201, 176, 0.04);
+    border-radius: 3px;
+    spacing: 3px;
+}
+.glance-peer.self    { border-left: 2px solid #6ea8ff; }
+.glance-peer.offline { border-left: 2px solid #82868f; }
+.glance-peer-head { spacing: 8px; }
+.glance-peer-dot { width: 7px; height: 7px; border-radius: 4px; background-color: #82868f; }
+.glance-peer-dot.online { background-color: #5fc26d; box-shadow: 0 0 5px #5fc26d; }
+.glance-peer-name { color: #4ec9b0; font-weight: bold; font-size: 12px; }
+.glance-peer.self    .glance-peer-name { color: #6ea8ff; }
+.glance-peer.offline .glance-peer-name { color: #82868f; }
+.glance-peer-os  { color: #82868f; font-size: 10px; }
+.glance-peer-ip  { color: #82868f; font-size: 10px; }
+.glance-peer-note { color: #82868f; font-size: 11px; font-style: italic; padding-left: 14px; }
+
+/* ── sessions ───────────────────────────────────────────────────────── */
+
+.glance-session {
+    padding: 4px 6px;
+    border-left: 2px solid #ff8a65;
+    background-color: rgba(255, 138, 101, 0.05);
+    border-radius: 3px;
+    spacing: 2px;
+}
+.glance-session.worktree { border-left: 2px solid #f2a44c; background-color: rgba(242, 164, 76, 0.05); }
+.glance-session-head { spacing: 6px; }
+.glance-session-cwd { color: #e1e3e8; font-size: 11px; }
+.glance-session-rss { color: #ff8a65; font-size: 11px; font-weight: bold; font-feature-settings: "tnum"; }
+.glance-session.worktree .glance-session-rss { color: #f2a44c; }
+.glance-session-meta { color: #82868f; font-size: 10px; padding-left: 14px; }
+
+/* ── inbox drafts ───────────────────────────────────────────────────── */
+
+.glance-draft { spacing: 6px; padding: 2px 6px; }
+.glance-draft-flag.warn { color: #f2a44c; }
+.glance-draft-flag.ok   { color: #5fc26d; }
+.glance-draft-id   { color: #e1e3e8; font-size: 11px; }
+.glance-draft-day  { color: #82868f; font-size: 10px; }
+
+/* ── linear ─────────────────────────────────────────────────────────── */
+
+.glance-li { spacing: 6px; padding: 2px 6px; }
+.glance-li-id    { color: #e1e3e8; font-size: 11px; min-width: 64px; }
+.glance-li-prio  { font-size: 10px; font-weight: bold; min-width: 18px; }
+.glance-li-prio.p1 { color: #ff5f56; }
+.glance-li-prio.p2 { color: #f2c94c; }
+.glance-li-prio.p3 { color: #82868f; }
+.glance-li-prio.p4 { color: #82868f; }
+.glance-li-state { color: #82868f; font-size: 10px; min-width: 72px; }
+.glance-li-due   { color: #82868f; font-size: 10px; min-width: 44px; font-feature-settings: "tnum"; }
+.glance-li-due.overdue { color: #ff5f56; font-weight: bold; }
+.glance-li-title { color: #e1e3e8; font-size: 11px; }
+
+/* ── calendar ───────────────────────────────────────────────────────── */
+
+.glance-cal-day {
+    color: #82868f;
+    font-size: 10px;
+    padding: 4px 6px 0;
+}
+.glance-cal-event { spacing: 8px; padding: 2px 6px; }
+.glance-cal-time   { color: #e1e3e8; font-size: 11px; min-width: 40px; font-feature-settings: "tnum"; }
+.glance-cal-summary { color: #e1e3e8; font-size: 11px; }

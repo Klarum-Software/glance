@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS launchd agent — autostarts the glance backend at login. -->
+<!-- Install: cp this file to ~/Library/LaunchAgents/ and edit the
+     ProgramArguments path to point at your clone.
+     Load:  launchctl load ~/Library/LaunchAgents/com.klarum.glance.plist
+     Unload: launchctl unload ~/Library/LaunchAgents/com.klarum.glance.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.klarum.glance</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/CHANGE_ME/repos/glance/server/server.js</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/glance.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/glance.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

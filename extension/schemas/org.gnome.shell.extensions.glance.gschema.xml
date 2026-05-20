@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="glance">
+  <schema id="org.gnome.shell.extensions.glance" path="/org/gnome/shell/extensions/glance/">
+    <key name="backend-port" type="i">
+      <default>5175</default>
+      <summary>Backend HTTP port</summary>
+      <description>Port the glance Node.js backend listens on (127.0.0.1 only).</description>
+    </key>
+    <key name="backend-path" type="s">
+      <default>""</default>
+      <summary>Path to server/server.js</summary>
+      <description>Absolute path to the glance backend entry point. If empty, the extension looks in the install directory and ~/repos/glance/server/server.js.</description>
+    </key>
+    <key name="auto-start-backend" type="b">
+      <default>true</default>
+      <summary>Auto-start backend</summary>
+      <description>If true, the extension spawns the backend on enable and stops it on disable.</description>
+    </key>
+    <key name="refresh-interval" type="i">
+      <default>30</default>
+      <summary>Refresh interval (seconds)</summary>
+      <description>How often the dashboard polls /api/state. Minimum 5.</description>
+    </key>
+    <key name="dropdown-width-pct" type="i">
+      <default>90</default>
+      <summary>Dropdown width (% of monitor)</summary>
+      <description>Width of the dashboard dropdown as a percentage of the monitor width. 30–100.</description>
+    </key>
+  </schema>
+</schemalist>
