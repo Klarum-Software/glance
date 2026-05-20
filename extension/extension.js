@@ -170,6 +170,11 @@ class GlanceIndicator extends PanelMenu.Button {
             this._backend.stop();
         }
         super.destroy();
+        this._dashboard = null;
+        this._dot       = null;
+        this._label     = null;
+        this._backend   = null;
+        this._state     = null;
     }
 });
 
