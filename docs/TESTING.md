@@ -15,13 +15,12 @@ recover when a bad change breaks gnome-shell.
 node scripts/smoke.js
 
 # 2. extension in a nested shell (the only safe dev environment)
-./install/install.sh
-dbus-run-session -- gnome-shell --nested --wayland
-# inside the nested window:
-gnome-extensions enable glance@klarum-software.github.io
+./scripts/dev-shell.sh
+# (installs, boots nested gnome-shell on a dedicated D-Bus session, enables
+# glance inside it, and streams the filtered journal. Ctrl+C cleans up.)
 
-# 3. tail logs from the nested shell
-journalctl --user -f -o cat /usr/bin/gnome-shell | grep -i glance
+# 3. iterate: edit code, then relaunch on the current tree
+./scripts/dev-restart.sh
 
 # 4. only after the nested shell looks correct: log out + log back in to
 #    test in your real session. There is no shortcut for this on Wayland.
@@ -77,40 +76,49 @@ confidence, not *UI* confidence.
 
 ### Layer 3 — nested gnome-shell (the real test)
 
-Install the current tree's extension into the user-extension location:
+**Use the script.** `scripts/dev-shell.sh` does the whole dance in one
+command: installs the current tree, starts a dedicated D-Bus session,
+boots `gnome-shell --nested --wayland` (or `--devkit` on GNOME 49+),
+waits for it to register on the bus, enables glance against the nested
+bus, and streams the journal filtered to the nested PID. Ctrl+C SIGTERMs
+the shell, kills the bus, and reaps any orphaned Node backend that came
+from the nested session.
+
+```bash
+./scripts/dev-shell.sh
+```
+
+To iterate: edit code, then run `./scripts/dev-restart.sh` (same script,
+but it first stops the previous nested shell and waits for cleanup before
+starting the new one). `--no-install` skips reinstalling, `--keep-logs
+PATH` mirrors the journal stream to a file. The script honors
+`MUTTER_DEBUG_NUM_DUMMY_MONITORS` and `MUTTER_DEBUG_DUMMY_MONITOR_SCALES`
+from the environment for multi-monitor/HiDPI testing without real
+hardware (see the GNOME Wayland-testing wiki page).
+
+Click the panel button in the nested window. The dropdown should open
+and render the columns correctly. If it doesn't, see "Debugging" below.
+**Do not log out of your real session yet.**
+
+**Manual fallback** (when the script can't run, e.g. you're debugging
+the script itself, or on a system without `dbus-daemon` or `gdbus`):
 
 ```bash
 ./install/install.sh
+dbus-run-session -- gnome-shell --nested --wayland
+# inside the nested window:
+gnome-extensions enable glance@klarum-software.github.io
+# in another terminal:
+journalctl --user -f -o cat /usr/bin/gnome-shell | grep -i glance
 ```
 
-This copies `extension/`, the bundled `server/`, and `public/` into
-`~/.local/share/gnome-shell/extensions/glance@klarum-software.github.io/`
-and compiles the gschema. Verify:
+Verify the install produced the right files:
 
 ```bash
 ls ~/.local/share/gnome-shell/extensions/glance@klarum-software.github.io/
 # should contain: extension.js, lib/, public/, schemas/, server/, prefs.js,
 # metadata.json, stylesheet.css
 ```
-
-Boot the nested shell:
-
-```bash
-dbus-run-session -- gnome-shell --nested --wayland
-```
-
-A new gnome-shell window appears. Inside it, enable the extension:
-
-```bash
-gnome-extensions enable glance@klarum-software.github.io
-```
-
-Click the panel button. The dropdown should open and render the columns
-correctly. If it doesn't, see "Debugging" below — **do not log out of
-your real session yet.**
-
-Iterate: edit code → re-run `install.sh` → close the nested window → open
-a new nested shell → re-enable. Slower than X11 reload, but recoverable.
 
 ### Layer 4 — real session (the ship gate)
 
