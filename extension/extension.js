@@ -110,9 +110,10 @@ class GlanceIndicator extends PanelMenu.Button {
         const pct = Math.max(30, Math.min(100, this._settings.get_int("dropdown-width-pct"))) / 100;
         const width  = Math.floor(monitor.width  * pct);
         const height = Math.floor(monitor.height * 0.42);
-        this.menu.box.set_width(width);
-        this._dashboard.set_width(width - 24);
-        this._dashboard.set_height(height);
+        // set_width is clamped by PopupMenu on some shell versions; min-width via
+        // inline style on our .glance-menu style_class survives the clamp.
+        this.menu.box.set_style(`min-width: ${width}px;`);
+        this._dashboard.set_style(`min-width: ${width - 24}px; min-height: ${height}px;`);
         // Immediate refresh on open so data is fresh.
         this._refresh();
     }
