@@ -6,12 +6,13 @@ import Gio  from "gi://Gio";
 
 export class Backend {
   constructor({ nodePath, serverPath, port, host = "127.0.0.1" }) {
-    this._node    = nodePath;
-    this._server  = serverPath;
-    this._port    = port;
-    this._host    = host;
-    this._proc    = null;
-    this._started = false;
+    this._node       = nodePath;
+    this._server     = serverPath;
+    this._port       = port;
+    this._host       = host;
+    this._proc       = null;
+    this._started    = false;
+    this._killTimer  = 0;
   }
 
   get url()  { return `http://${this._host}:${this._port}`; }
@@ -37,6 +38,10 @@ export class Backend {
       try { p.wait_finish(res); } catch (_) {}
       this._started = false;
       this._proc = null;
+      if (this._killTimer) {
+        GLib.Source.remove(this._killTimer);
+        this._killTimer = 0;
+      }
       if (onExit) onExit();
     });
   }
@@ -44,7 +49,8 @@ export class Backend {
   stop() {
     if (!this._proc) return;
     try { this._proc.send_signal(15); } catch (_) {}
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+    this._killTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+      this._killTimer = 0;
       if (this._proc) {
         try { this._proc.force_exit(); } catch (_) {}
       }
