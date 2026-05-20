@@ -11,8 +11,8 @@ that smells relevant to your patch, read the cited source before
 
 **Rule.** Anything created, connected, scheduled, spawned or added to GNOME
 Shell inside `enable()` MUST be undone inside `disable()`. There is no other
-hook that runs. `disable()` can be called at any time — including during a
-screen lock — and `enable()` may be called again immediately afterwards.
+hook that runs. `disable()` can be called at any time (including during a
+screen lock) and `enable()` may be called again immediately afterwards.
 Failing this is, per upstream, "the most common reason extensions are
 rejected." [gjs.guide/extensions/overview/anatomy](https://gjs.guide/extensions/overview/anatomy.html)
 
@@ -43,19 +43,21 @@ disable() {
 The optional chain handles the case where `enable()` aborted partway through.
 [gjs.guide/extensions/development/creating](https://gjs.guide/extensions/development/creating.html)
 
-**glance status.** `extension.js:177` follows the pattern. The
-`GlanceIndicator.destroy()` override at `extension.js:164` removes the
-timeout and stops the backend — good. See audit (S2, S3) for what's still
-loose.
+**glance status.** `GlanceExtension.disable()` destroys the indicator
+and nulls out `_settings`. `GlanceIndicator.destroy()` cancels the
+shared `Gio.Cancellable`, removes the refresh timeout, disconnects
+every tracked handler id, stops the backend, calls `super.destroy()`,
+and nulls cached widget references. Pattern is in place; keep it that
+way when new actors or signals are added.
 
 ## 2. Wayland reality
 
-`Alt+F2 r` no longer restarts gnome-shell on Wayland — the compositor and
+`Alt+F2 r` no longer restarts gnome-shell on Wayland: the compositor and
 shell are the same process; restarting the process would kill your session.
 The official workflow is: log out, log in.
 [gjs.guide/extensions/development/debugging](https://gjs.guide/extensions/development/debugging.html)
 
-For dev iteration, use a nested shell — it runs on a separate D-Bus session
+For dev iteration, use a nested shell. It runs on a separate D-Bus session
 and won't affect the host:
 
 ```bash
@@ -69,8 +71,9 @@ For day-to-day iteration, use `scripts/dev-shell.sh`. It wraps both flag
 spellings, runs the install, drives the nested shell over a dedicated bus,
 and reaps orphans on exit. See `docs/TESTING.md` Layer 3.
 
-**glance status.** `docs/CONTRIBUTING.md:38-46` already documents this
-correctly.
+**glance status.** [docs/CONTRIBUTING.md](CONTRIBUTING.md) and
+[docs/TESTING.md](TESTING.md) both document the nested-shell dev loop
+driven by `scripts/dev-shell.sh` / `scripts/dev-restart.sh`.
 
 ## 3. Track every signal, every timeout, every async operation
 
@@ -101,12 +104,12 @@ Gio.Cancellable has been cancelled, you should drop the reference to it and
 create a new instance for future operations."
 [gjs.guide/guides/gjs/asynchronous-programming](https://gjs.guide/guides/gjs/asynchronous-programming.html)
 
-**glance status.** `extension.js:76` connects `open-state-changed` without
-storing the handler id — destroying the menu will tear it down implicitly,
-but if anything ever changes that ownership relationship, the leak will be
-silent. The single `_refreshTimer` at `extension.js:123` is tracked correctly
-and removed in `destroy()` at `extension.js:164`. The `api.get/post` calls
-have no cancellable — see audit (A1).
+**glance status.** Every handler id is pushed onto a `_handlerIds`
+`[obj, id]` array and disconnected in `destroy()`. The single
+`_refreshTimer` is tracked and removed. `api.get/post` accept a
+`Gio.Cancellable` and the indicator owns one shared cancellable that
+is cancelled on destroy, so an in-flight `/api/state` poll does not
+fire its callback against a torn-down indicator.
 
 ## 4. St / Clutter widget hygiene across 45→48
 
@@ -117,7 +120,7 @@ interface was removed in GNOME 46.
 
 For `St.ScrollView`, the modern API is `set_child()`. The legacy
 `add_actor()` shim was the only option on shell 45 and is removed by shell
-46 in some paths — code that calls one or the other unconditionally will
+46 in some paths; code that calls one or the other unconditionally will
 break on at least one supported version.
 [gjs.guide/extensions/upgrading/gnome-shell-46](https://gjs.guide/extensions/upgrading/gnome-shell-46.html)
 
@@ -127,15 +130,17 @@ break on at least one supported version.
 scroll.add_actor ? scroll.add_actor(inner) : scroll.set_child(inner);
 ```
 
-That's the exact pattern `render.js:84` uses — keep it.
+This pattern only matters historically: the shim has since been removed
+because shell 45 is no longer supported. The current code calls
+`scroll.set_child(inner)` directly.
 
 **Other 46/47/48 footguns that will bite this codebase:**
 
 - `St.Bin` only honors `x_expand`/`y_expand`, no longer `Clutter.ActorAlign.FILL`. (46)
 - `St.Button` labels default to plain text instead of Pango markup. (46)
-- `Clutter.Color` was removed in 47 — use `Cogl.Color`.
+- `Clutter.Color` was removed in 47; use `Cogl.Color`.
   [gjs.guide/extensions/upgrading/gnome-shell-47](https://gjs.guide/extensions/upgrading/gnome-shell-47.html)
-- `Clutter.Image` removed in 48 — use `St.ImageContent`.
+- `Clutter.Image` removed in 48; use `St.ImageContent`.
 - `vertical: true` is deprecated on St boxes in 48; prefer
   `orientation: Clutter.Orientation.VERTICAL`. Still works in 48 but the
   warning is loud in logs.
@@ -148,16 +153,20 @@ shell 45/46/48 in practice, but if the dropdown is the wrong width after a
 shell upgrade, this is where to look.
 [gnome-shell-extension-reference#PopupMenu styling](https://github.com/julio641742/gnome-shell-extension-reference/blob/master/tutorials/POPUPMENU-EXTENSION.md)
 
-**glance status.** `render.js:84` shim is correct. `extension.js:113`
-calls `set_width` on `menu.box` — see audit (S1). `vertical: true` is used
-throughout render.js — works through 48, but deprecation warnings will
-appear in logs.
+**glance status.** Dropdown width is controlled by an inline
+`min-width` style on `this.menu.box` and the dashboard container, not
+by `set_width()`; this survives PopupMenu's wrapper clamping. Every
+`St.BoxLayout` uses `orientation: Clutter.Orientation.VERTICAL` /
+`HORIZONTAL` rather than the deprecated `vertical: true`. The
+`add_actor`/`set_child` shim has been removed: `extension/lib/render.js`
+calls `scroll.set_child(inner)` unconditionally, which matches the
+supported shell range (46-48).
 
 ## 5. Subprocess hygiene (Gio.SubprocessLauncher)
 
-**Rule 1 — flags.** If you set `STDOUT_PIPE` or `STDERR_PIPE`, you MUST read
+**Rule 1, flags.** If you set `STDOUT_PIPE` or `STDERR_PIPE`, you MUST read
 the pipes. Pipe buffers are ~64 KiB on Linux; once full, the child blocks on
-`write()` and never exits, and `wait_async` never returns — classic
+`write()` and never exits, and `wait_async` never returns: classic
 subprocess deadlock.
 [docs.gtk.org Gio.SubprocessFlags](https://docs.gtk.org/gio/flags.SubprocessFlags.html),
 [tey.sh "Deadlocking Linux subprocesses using pipes"](https://tey.sh/TIL/002_subprocess_pipe_deadlocks)
@@ -165,32 +174,34 @@ subprocess deadlock.
 For a backend you don't intend to consume stdout from, use
 `STDOUT_SILENCE | STDERR_SILENCE` (discards to /dev/null inside libgio).
 
-**Rule 2 — termination.** On `disable()`, SIGTERM the child, then arm a
+**Rule 2, termination.** On `disable()`, SIGTERM the child, then arm a
 fallback `force_exit()` after a short grace window. Per upstream:
 "`force_exit()` to cleanly terminate subprocesses rather than letting them
 become orphaned."
 [gjs.guide/guides/gio/subprocesses](https://gjs.guide/guides/gio/subprocesses.html)
 
-**Rule 3 — never block.** Always use `wait_async` /
-`communicate_utf8_async`, never the sync variants — they block the
+**Rule 3, never block.** Always use `wait_async` /
+`communicate_utf8_async`, never the sync variants; they block the
 compositor.
 [gjs.guide/guides/gio/subprocesses](https://gjs.guide/guides/gio/subprocesses.html)
 
-**Rule 4 — EGO binaries.** EGO will outright reject any extension that ships
+**Rule 4, EGO binaries.** EGO will outright reject any extension that ships
 a binary executable. The Node.js backend in glance is intentionally outside
-the extension zip (it lives in `server/`) — keep it that way if you ever
+the extension zip (it lives in `server/`); keep it that way if you ever
 upload to extensions.gnome.org.
 [gjs.guide/extensions/review-guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
 
-**glance status.** `backend.js:22` sets `STDOUT_PIPE | STDERR_PIPE` but
-never reads either pipe — if the Node backend ever writes more than ~64 KiB
-to stdout/stderr (e.g. a request handler throws in a loop), the shell will
-hang on `wait_async`. See audit (B1) — switch to
-`STDOUT_SILENCE | STDERR_SILENCE` or read the streams. `backend.js:74`
-calls `GLib.spawn_command_line_sync("which node")` from `enable()` — sync,
-on the compositor thread. See audit (B2). Termination flow at
-`backend.js:44` is OK; the `GLib.timeout_add` source for `force_exit` is
-not tracked, which is a minor leak (B3).
+**glance status.** Flags are `STDOUT_SILENCE | STDERR_PIPE`; stderr is
+drained continuously via `DataInputStream.read_line_async` so the
+buffer cannot fill, and the first non-empty line is captured for
+diagnostics. The fast-exit case (e.g. EADDRINUSE) is surfaced as a
+`Main.notify` instead of silently swallowed. Node-path resolution is
+filesystem-only (a static candidate list checked via
+`GLib.file_test`); the old synchronous `which node` shell-out is gone.
+The `force_exit` fallback timeout is stored as a source id and
+removed when the child exits cleanly or the extension re-enables, so
+a `disable` followed by an immediate `enable` cannot fire force-exit
+on a stale `_proc`.
 
 ## 6. Soup3 quirks
 
@@ -205,14 +216,15 @@ not tracked, which is a minor leak (B3).
   internal connection pools; don't create one per request.
   [libsoup-3.0 Session](https://gnome.pages.gitlab.gnome.org/libsoup/libsoup-3.0/class.Session.html)
 - **Request body.** `Soup.Message.set_request_body_from_bytes(mime, GLib.Bytes)`
-  is the libsoup3 idiom. CLAUDE.md flags
-  `Message.new_request_body_from_bytes` as a known fragility — that variant
+  is the libsoup3 idiom. The variant
+  `Message.new_request_body_from_bytes` is a known fragility: it
   doesn't exist on the message class; the working call is the setter.
 
-**glance status.** `api.js:7` creates one session — good. Timeout 5 s is
-fine for localhost. `api.js:34` uses `set_request_body_from_bytes` — that's
-the right call. `null` is passed as cancellable on both reads — this is the
-big gap; see audit (A1).
+**glance status.** One `Soup.Session` is created at module scope.
+Timeout is 5 s (localhost-only). `set_request_body_from_bytes` is the
+call used. Both `get()` and `post()` accept a `Gio.Cancellable`
+argument and thread it through `send_and_read_async`; the indicator
+owns a shared cancellable cancelled on destroy.
 
 ## 7. gschema settings: when to recompile, how to evolve
 
@@ -231,9 +243,8 @@ defaults (key removed).
 4. Old user-set values in dconf become inaccessible but do not cause errors.
    To purge: `dconf reset -f /org/gnome/shell/extensions/glance/`.
 
-The `inbox-dir` and related keys removed by commit `f3295d7` are an example
-of this — they're gone from the XML; users will simply see defaults for
-whatever's left.
+If a key is removed later, those old values in dconf become inert and
+users will see the documented defaults for whatever keys remain.
 
 **Rule.** Schema ID and path must follow the
 `org.gnome.shell.extensions.<name>` / `/org/gnome/shell/extensions/<name>/`
@@ -242,8 +253,8 @@ convention; EGO enforces this.
 
 **glance status.** Schema id and path at
 `extension/schemas/org.gnome.shell.extensions.glance.gschema.xml:3` are
-correct. `gschemas.compiled` is checked in — fine for the local install
-flow.
+correct. `gschemas.compiled` is checked in (fine for the local install
+flow).
 
 ## 8. `prefs.js` rules
 
@@ -254,7 +265,7 @@ documented automatic-rejection criterion at EGO and crashes the prefs
 window at best.
 [gjs.guide/extensions/review-guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
 
-**Rule.** Use `Gio.Settings.bind()` for simple-typed widgets — it gives you
+**Rule.** Use `Gio.Settings.bind()` for simple-typed widgets; it gives you
 two-way binding without any signal plumbing to clean up.
 [gjs.guide/extensions/development/preferences](https://gjs.guide/extensions/development/preferences.html)
 
@@ -262,8 +273,8 @@ two-way binding without any signal plumbing to clean up.
 GNOME 47). Don't perform sync I/O there.
 [gjs.guide/extensions/upgrading/gnome-shell-47](https://gjs.guide/extensions/upgrading/gnome-shell-47.html)
 
-**glance status.** `prefs.js` imports `Adw`, `Gtk`, `Gio` only — correct.
-Uses `settings.bind` throughout — correct.
+**glance status.** `prefs.js` imports `Adw`, `Gtk`, `Gio` only (correct).
+Uses `settings.bind` throughout (correct).
 
 ## 9. Logging
 
@@ -271,24 +282,25 @@ Uses `settings.bind` throughout — correct.
   is the modern path.
 - The old `log()` and `logError()` still work but `console.*` is preferred.
 - GNOME 48 added `ExtensionBase.getLogger()` which prefixes every line with
-  the extension name — strongly recommended for shell 48+.
+  the extension name; strongly recommended for shell 48+.
   [gjs.guide/extensions/upgrading/gnome-shell-48](https://gjs.guide/extensions/upgrading/gnome-shell-48.html)
 - Read logs with `journalctl --user -f /usr/bin/gnome-shell` (or
   `journalctl --user --since "1 hour ago" /usr/bin/gnome-shell | grep -i glance`).
-- EGO will reject "excessive logging" — keep info chatter behind a debug
+- EGO will reject "excessive logging"; keep info chatter behind a debug
   flag.
   [gjs.guide/extensions/review-guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
 
-**glance status.** `extension.js:92`, `backend.js:31` use the legacy
-`log()` — fine, but moving to `this.getLogger()` once we drop 45/46 would
-make journals easier to filter.
+**glance status.** Backend lifecycle messages use the legacy `log()`
+prefixed with `[glance]`. Migrating to `this.getLogger()` would auto-
+prefix every line with the extension name; consider doing so when shell
+46 is dropped from the supported range.
 
 ## 10. Versioning and EGO submission
 
 - `metadata.json` `shell-version` is an array of major numbers. `["45",
   "46", "47", "48"]` means "compatible with all four."
   [gjs.guide/extensions/overview/anatomy](https://gjs.guide/extensions/overview/anatomy.html)
-- EGO sets the submission `version` integer itself — don't try to control
+- EGO sets the submission `version` integer itself; don't try to control
   it.
   [discourse.gnome.org thread on EGO uploads](https://discourse.gnome.org/t/cant-upload-extension-to-ego/12818)
 - Automatic-rejection criteria summary from upstream: shipping binaries,
@@ -297,20 +309,24 @@ make journals easier to filter.
   without disclosure, GPL-2.0 incompatibility.
   [gjs.guide/extensions/review-guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
 
-**glance status.** `metadata.json` lists `["45", "46", "47", "48"]` — good
-for the spread we've validated against. No bundled binaries (the Node server
-is shipped via the `install.sh` script, not the extension zip itself).
-If/when submitting to EGO, double-check that the install path produces a zip
-without `server/` inside it.
+**glance status.** `metadata.json` lists `["46", "47", "48"]` with
+`"session-modes": ["user"]`. Shell 45 was dropped once the
+`add_actor`/`set_child` shim was removed. No bundled binaries: the Node
+backend is copied next to the extension by `install.sh`, but is not
+part of the extension package itself. If submitting to EGO, double-check
+that the upload contains only the `extension/` contents (no `server/`,
+no `public/`).
 
 ## 11. Anti-patterns: don't do these
 
 - **Don't block the compositor.** No `spawn_command_line_sync`,
   `GLib.usleep`, JSON parsing of multi-MB inputs, or any sync I/O on the
-  main loop. The whole shell freezes for the duration. See `backend.js:74`.
+  main loop. The whole shell freezes for the duration. (The previous
+  synchronous `which node` shell-out in `backend.js` is gone; the
+  candidate-list approach replaced it.)
 - **Don't monkey-patch shell internals.** Wrapping `Main.panel`,
   `PopupMenu.PopupMenu.prototype`, etc. survives until the next shell
-  release, then breaks. Subclass `PanelMenu.Button` (which glance does) —
+  release, then breaks. Subclass `PanelMenu.Button` (which glance does);
   don't replace its methods on the prototype.
 - **Don't depend on private APIs.** Anything in
   `resource:///org/gnome/shell/ui/main.js` that isn't documented in
@@ -318,7 +334,7 @@ without `server/` inside it.
   versions.
 - **Don't hold strong references to destroyed objects.** A signal handler
   closing over `this._indicator` after `disable()` set it to `null` keeps
-  it alive — disconnect first, null second, in that order.
+  it alive; disconnect first, null second, in that order.
   [gjs.guide/guides/gjs/memory-management](https://gjs.guide/guides/gjs/memory-management.html)
 - **Don't call `GObject.Object.run_dispose()`** to "force cleanup." Per
   EGO: only with documented justification. It crashes if anything else
@@ -330,66 +346,40 @@ without `server/` inside it.
   expect readable plain JS; bundled output triggers "obfuscated" rejection.
   [gjs.guide/extensions/review-guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
 
-## Audit of current code
+## Audit status
 
-Concrete, file-scoped TODOs. Severity in brackets: H = will eventually
-brick the shell or leak; M = will warn loudly; L = stylistic / future-proof.
+The original audit had three [H], four [M], and four [L] items against
+the extension. The high- and medium-severity items have been resolved:
 
-- **[H] B1 — `extension/lib/backend.js:23`.** `Gio.SubprocessFlags.STDOUT_PIPE | STDERR_PIPE`
-  is set but nothing ever reads from the pipes. If the Node backend writes
-  > ~64 KiB to stdout/stderr it will block, `wait_async` will never fire,
-  and `disable()` cannot complete. Either switch to
-  `STDOUT_SILENCE | STDERR_SILENCE`, or wire a `DataInputStream.read_line_async`
-  loop that drains both streams.
+- Subprocess stdout/stderr no longer risks pipe-fill deadlock (stdout
+  silenced; stderr drained continuously).
+- The synchronous `which node` shell-out during `enable()` is gone;
+  node-path resolution is filesystem-only via a static candidate list.
+- Backend fast-exit (e.g. EADDRINUSE) is surfaced to the user instead
+  of swallowed.
+- `Soup` requests accept a `Gio.Cancellable` and the indicator cancels
+  in-flight reads on destroy.
+- The `force_exit` fallback timeout is tracked and removed when the
+  child exits cleanly or the extension re-enables.
+- Dropdown width is driven by CSS `min-width` rather than
+  `PopupMenu.box.set_width()`.
+- The `open-state-changed` handler id is stored and disconnected.
+- `destroy()` nulls cached widget refs.
+- `St.BoxLayout` uses the `Clutter.Orientation` enum, not `vertical: true`.
+- The `add_actor`/`set_child` shim has been removed; shell 45 dropped.
+- `metadata.json` declares `"session-modes": ["user"]` explicitly.
 
-- **[H] B2 — `extension/lib/backend.js:74-79`.** `GLib.spawn_command_line_sync("which node")`
-  runs synchronously on the compositor thread during `enable()`. On a cold
-  PATH or slow filesystem this freezes the shell. Replace with the
-  hard-coded candidate list (already present below it) and skip the `which`
-  call entirely, or move it to a one-shot `Gio.Subprocess.communicate_utf8_async`.
+What's left, footnote-grade:
 
-- **[M] A1 — `extension/lib/api.js:13,36`.** No `Gio.Cancellable` is passed
-  to `send_and_read_async`; the `null` argument means a pending request
-  cannot be cancelled when the extension is disabled mid-flight. With a
-  30 s default refresh interval this is mostly benign, but a `disable()`
-  followed by immediate re-`enable()` (session-mode flip) can race on the
-  callback. Create a `Gio.Cancellable` in `enable()`, pass it to every
-  request, and `.cancel()` in `disable()`.
+- **Logger migration.** `log("[glance] ...")` in `backend.js` and
+  `extension.js` could move to `this.getLogger()` once shell 46 is no
+  longer supported; getLogger auto-prefixes the extension name on every
+  line.
+- **EGO submission hygiene.** If we ever upload to extensions.gnome.org,
+  add a step that produces an `extension/`-only zip (no bundled
+  `server/`, no `public/`, no `node_modules/`). EGO rejects shipped
+  binaries and vendored runtimes.
 
-- **[M] B3 — `extension/lib/backend.js:47`.** The `GLib.timeout_add` that
-  fires `force_exit` 1.5 s after SIGTERM is not stored as a source id and
-  not removed. If `disable()` -> `enable()` happens in under 1.5 s, the
-  timeout still fires on a stale `_proc`. Track the source id and remove
-  it in `disable()` (and in the `wait_async` exit callback when the child
-  exits cleanly).
-
-- **[M] S1 — `extension/extension.js:113`.** `this.menu.box.set_width(width)`
-  is the high-risk path flagged in CLAUDE.md. If the dropdown comes out
-  narrow on some shell version, move width control into stylesheet.css
-  via a `min-width` rule on a custom `style_class` instead.
-
-- **[L] S2 — `extension/extension.js:76`.** The `open-state-changed`
-  handler id is not stored. Today the menu owns the connection, so
-  `super.destroy()` tears it down; if we ever swap `this.menu` for a
-  different popup, this becomes a leak. Cheap fix: push the id onto a
-  `this._handlerIds` array and disconnect in `destroy()`.
-
-- **[L] S3 — `extension/extension.js:165-172`.** `destroy()` does the
-  right things but does not null out `this._dashboard`, `this._dot`,
-  `this._label`, `this._backend`. They're released when `_indicator` is
-  GC'd, but explicit `= null` makes the lifecycle obvious and helps
-  catch reentrancy bugs.
-
-- **[L] R1 — `extension/lib/render.js` (throughout).** `vertical: true` on
-  St boxes is deprecated as of shell 48. Works, but produces deprecation
-  warnings in the journal. When we drop shell 45/46, migrate to
-  `orientation: Clutter.Orientation.VERTICAL`.
-
-- **[L] R2 — `extension/lib/render.js:84`.** The `add_actor` / `set_child`
-  shim is correct. Keep it as long as `metadata.json` lists `"45"`. When
-  we drop 45, this can become `scroll.set_child(inner)` unconditionally.
-
-- **[L] M1 — `extension/metadata.json`.** Consider adding `"session-modes":
-  ["user"]` explicitly. Default behaviour is `user`-only, but stating it
-  protects against future GNOME defaults shifting, and makes intent
-  explicit to EGO reviewers.
+New high- or medium-severity findings should be added back to this
+section as concrete, file-scoped TODOs with a citation to the rule they
+violate.
