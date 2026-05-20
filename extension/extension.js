@@ -152,12 +152,10 @@ class GlanceIndicator extends PanelMenu.Button {
         const p1 = (lin.items || []).filter(i => i.priority === 1).length;
         const overdue = lin.overdue || 0;
         const sessions = (state.sessions || []).length;
-        const drafts = (state.drafts || []).length;
 
         const parts = [];
         if (p1)       parts.push(`P1·${p1}`);
         if (overdue)  parts.push(`!${overdue}`);
-        if (drafts)   parts.push(`⚑${drafts}`);
         if (sessions) parts.push(`▸${sessions}`);
         this._label.text = parts.length ? parts.join("  ") : "glance";
         this._dot.style_class = "system-status-icon glance-dot online" + (overdue ? " warn" : "");

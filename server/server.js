@@ -189,34 +189,6 @@ async function gatherRemote() {
   return { status: "ok", peers };
 }
 
-function gatherDrafts(limit = 30) {
-  const out = [];
-  let dayEntries = [];
-  try { dayEntries = fs.readdirSync(cfg.inboxDir); } catch { return out; }
-  for (const day of dayEntries) {
-    if (day === "archive" || day.startsWith(".")) continue;
-    const dayDir = path.join(cfg.inboxDir, day);
-    let subs;
-    try { subs = fs.readdirSync(dayDir); } catch { continue; }
-    for (const sub of subs) {
-      const draft = path.join(dayDir, sub, "draft.md");
-      let st;
-      try { st = fs.statSync(draft); } catch { continue; }
-      const m = sub.match(/^issue-([A-Z]+-\d+)$/);
-      const id = m ? m[1] : sub;
-      let body = "";
-      try { body = fs.readFileSync(draft, "utf8"); } catch {}
-      out.push({
-        id, day, path: draft,
-        mtime: st.mtimeMs,
-        has_noah_markers: /\[NOAH:/.test(body),
-      });
-    }
-  }
-  out.sort((a, b) => b.mtime - a.mtime);
-  return out.slice(0, limit);
-}
-
 function gatherLinear(limit = 50) {
   const dir = path.join(cfg.inboxDir, ".linear-cache");
   let names;
@@ -394,8 +366,7 @@ function gatherSessions() {
 }
 
 async function gatherState() {
-  const [drafts, linear, calendar, remote] = await Promise.all([
-    Promise.resolve(gatherDrafts()),
+  const [linear, calendar, remote] = await Promise.all([
     Promise.resolve(gatherLinear()),
     gatherCalendar(),
     gatherRemote(),
@@ -408,7 +379,7 @@ async function gatherState() {
     memory: gatherMemory(),
     sessions: gatherSessions(),
     remote,
-    drafts, linear, calendar,
+    linear, calendar,
   };
 }
 

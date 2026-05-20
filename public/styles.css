@@ -13,7 +13,6 @@
   --orch:      #4ec9b0;
   --remote:    #4ec9b0;
   --sessions:  #ff8a65;
-  --inbox:     #c586c0;
   --linear:    #f2c94c;
   --calendar:  #6cc04a;
   --p1:        #ff5f56;
@@ -212,7 +211,6 @@ body.col-resizing * { cursor: col-resize !important; }
 .col-tag.orch     { color: var(--orch); }
 .col-tag.remote   { color: var(--remote); }
 .col-tag.sessions { color: var(--sessions); }
-.col-tag.inbox    { color: var(--inbox); }
 .col-tag.linear   { color: var(--linear); }
 .col-tag.calendar { color: var(--calendar); }
 .col-meta {
@@ -555,26 +553,6 @@ body.col-resizing * { cursor: col-resize !important; }
   font-size: 11px;
   padding: 4px 6px;
 }
-
-/* ── inbox column ──────────────────────────────────────────────────────── */
-
-.draft-id {
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
-  color: var(--text);
-}
-.draft-day {
-  color: var(--muted);
-  font-size: 10px;
-  margin-left: auto;
-}
-.draft-flag {
-  width: 12px;
-  text-align: center;
-  flex-shrink: 0;
-}
-.draft-flag.warn { color: var(--warn); }
-.draft-flag.ok   { color: var(--ok); }
 
 /* ── linear column ─────────────────────────────────────────────────────── */
 
