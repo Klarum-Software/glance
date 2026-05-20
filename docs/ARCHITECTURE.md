@@ -5,15 +5,15 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Frontend (one of)                                                │
-│  • GNOME Shell extension  (Linux/GNOME — native, recommended)     │
+│  • GNOME Shell extension  (Linux/GNOME, native, recommended)     │
 │  • Browser at 127.0.0.1:5175/  (any OS with a browser)            │
 └──────────────────────────────────────────────────────────────────┘
                                   │ HTTP /api/state (poll, 30s)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Backend  — Node.js, zero npm deps                                │
+│  Backend (Node.js, zero npm deps)                                │
 │  server/server.js                                                  │
-│  ├─ HTTP router  (8 endpoints, all localhost-only)                │
+│  ├─ HTTP router  (9 endpoints, all localhost-only)                │
 │  ├─ State aggregator                                              │
 │  └─ Platform adapter (one of)                                     │
 │      • server/platform/linux.js   (systemctl, /proc, ps)          │
@@ -36,21 +36,29 @@
 | Concern               | Solution                                                 |
 |-----------------------|----------------------------------------------------------|
 | Cross-OS data         | Node.js backend with thin per-OS adapters                |
-| Always-on display     | GNOME extension — loaded by gnome-shell, no autostart    |
+| Always-on display     | GNOME extension, loaded by gnome-shell, no autostart     |
 | Non-GNOME users       | Browser tab at 127.0.0.1:5175/                           |
 | No persistent daemon  | Extension lifecycle manages backend (`enable`→spawn, `disable`→SIGTERM) |
-| Zero install pain     | No npm install needed — backend has no dependencies       |
+| Zero install pain     | No npm install needed (backend has no dependencies)      |
 
 ## Endpoints
 
-| Method | Path               | Purpose                              |
-|--------|--------------------|--------------------------------------|
-| GET    | `/api/health`      | `{ ok, version, platform }`           |
-| GET    | `/api/state`       | Aggregated snapshot                   |
-| POST   | `/api/refresh`     | Invalidate caches, return fresh state |
-| POST   | `/api/sync-linear` | Proxy to configured sync URL          |
-| POST   | `/api/open`        | `{ url }` → opens in default handler  |
-| GET    | `/`                | Browser fallback dashboard            |
+| Method | Path                          | Purpose                                          |
+|--------|-------------------------------|--------------------------------------------------|
+| GET    | `/api/health`                 | `{ ok, version, platform }`                       |
+| GET    | `/api/state`                  | Aggregated snapshot                               |
+| POST   | `/api/refresh`                | Invalidate caches, return fresh state             |
+| POST   | `/api/sync-linear`            | Proxy to configured sync URL                      |
+| POST   | `/api/open`                   | `{ url }` opens in default handler                |
+| GET    | `/api/config/peers`           | List manually configured remote peers             |
+| POST   | `/api/config/peers`           | `{ name, host, port? }` add a manual peer         |
+| DELETE | `/api/config/peers/:name`     | Remove a manual peer by name                      |
+| GET    | `/`                           | Browser fallback dashboard (and static assets)    |
+
+All endpoints bind to `127.0.0.1` only. Peer-name and host inputs are
+validated against `[a-zA-Z0-9._-]` and RFC1123-hostname / IPv4 regexes
+respectively; `port` must be `1..65535`. Config mutations write via
+sibling tmpfile + rename to avoid corruption.
 
 ## Configuration
 
@@ -66,7 +74,7 @@ Each is also overridable via `GLANCE_*` env vars.
 ```
 extension/
 ├── metadata.json                    # UUID, shell-version, schema id
-├── extension.js                     # main entry — PanelMenu.Button + lifecycle
+├── extension.js                     # main entry: PanelMenu.Button + lifecycle
 ├── prefs.js                         # Adw-based preferences dialog
 ├── stylesheet.css                   # Pivi design language inside St
 ├── schemas/
@@ -80,12 +88,22 @@ extension/
 
 ## Threading / lifecycle
 
-- Extension enables → spawns backend via `Gio.SubprocessLauncher`
-- Extension polls `/api/state` every `refresh-interval` seconds (default 30)
-- Panel button shows compact summary: `P1·n  !overdue  ▸sessions`
-- Click → menu opens, dashboard renders in St widgets, sized to
-  `dropdown-width-pct` of primary monitor
-- Extension disables → SIGTERM to backend, fallback `force_exit` after 1.5s
+- Extension enables, spawns the backend via `Gio.SubprocessLauncher`
+  (stdout silenced, stderr drained continuously to avoid pipe-fill
+  deadlock; first stderr line captured for diagnostics).
+- Backend resolution is path-based, not `which`-based: a list of
+  candidate node and `server.js` paths is checked synchronously against
+  the filesystem only (no compositor-blocking shell-out).
+- Extension polls `/api/state` every `refresh-interval` seconds
+  (default 30) through one long-lived `Soup.Session`. All requests pass
+  a `Gio.Cancellable` so they unwind cleanly on disable.
+- Panel button shows a compact summary: `P1.n  !overdue  >sessions`.
+- Click opens the menu, the dashboard renders into St widgets, sized
+  via CSS `min-width` driven by `dropdown-width-pct` (set_width on the
+  PopupMenu box was unreliable across shell versions).
+- Extension disables: SIGTERM to the backend, fallback `force_exit`
+  after 1.5 s. The force-exit timeout is a tracked source id and is
+  cleared if the child exits cleanly or the extension re-enables.
 
 ## What we don't do
 

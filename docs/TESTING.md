@@ -1,7 +1,7 @@
 # Testing glance
 
 > **glance is a GNOME Shell extension first.** The browser fallback exists
-> for QA on the data layer and for users on non-GNOME desktops — not as a
+> for QA on the data layer and for users on non-GNOME desktops, not as a
 > daily driver. Every change must be validated in the actual extension
 > before it's considered shipped.
 
@@ -11,7 +11,7 @@ recover when a bad change breaks gnome-shell.
 ## TL;DR
 
 ```bash
-# 1. backend smoke (always do this first — catches data-layer bugs cheap)
+# 1. backend smoke (always do this first; catches data-layer bugs cheap)
 node scripts/smoke.js
 
 # 2. extension in a nested shell (the only safe dev environment)
@@ -36,11 +36,11 @@ no way to re-edit code in-session, and a forced logout.
 **The mitigation is the nested shell.** `gnome-shell --nested --wayland`
 spawns a second gnome-shell process inside a window on your real session.
 It has its own panel, its own extensions, its own state. If you crash it,
-you close the window — your real session is untouched.
+you close the window; your real session is untouched.
 
 ## Three layers of testing, in order
 
-### Layer 1 — backend (cheap, fast, do this every change)
+### Layer 1: backend (cheap, fast, do this every change)
 
 ```bash
 node scripts/smoke.js
@@ -48,12 +48,12 @@ node scripts/smoke.js
 
 Boots the Node server on port 5199 and hits `/api/health` + `/api/state`.
 Confirms the data-aggregation layer works end-to-end. If this fails, the
-extension definitely won't work — fix it here first.
+extension definitely won't work; fix it here first.
 
 For data-layer changes only (server, platform adapters, config), this is
 usually the only test that matters.
 
-### Layer 2 — browser fallback (QA only)
+### Layer 2: browser fallback (QA only)
 
 ```bash
 node server/server.js   # boots on http://127.0.0.1:5175/
@@ -74,7 +74,7 @@ different rendering pipeline. A change that looks correct in the browser
 can render broken in St, and vice versa. The browser is for *data*
 confidence, not *UI* confidence.
 
-### Layer 3 — nested gnome-shell (the real test)
+### Layer 3: nested gnome-shell (the real test)
 
 **Use the script.** `scripts/dev-shell.sh` does the whole dance in one
 command: installs the current tree, starts a dedicated D-Bus session,
@@ -120,7 +120,7 @@ ls ~/.local/share/gnome-shell/extensions/glance@klarum-software.github.io/
 # metadata.json, stylesheet.css
 ```
 
-### Layer 4 — real session (the ship gate)
+### Layer 4: real session (the ship gate)
 
 Only after the nested shell looks correct. Log out and log back in. The
 extension will load from the same `~/.local/share/gnome-shell/extensions/`
@@ -151,11 +151,11 @@ journalctl --user -f -o cat _COMM=gnome-shell
 ```
 
 Common error shapes:
-- `Extension glance@... failed to load: <stack>` — syntax or import error.
-  Run `node --check` on every `extension/**/*.js`.
-- `JS ERROR: ... is not a function` — likely a GNOME-version API drift.
+- `Extension glance@... failed to load: <stack>` is a syntax or import
+  error. Run `node --check` on every `extension/**/*.js`.
+- `JS ERROR: ... is not a function` is likely a GNOME-version API drift.
   See the [version-drift section](#version-drift).
-- Panel button appears but dropdown is blank — the renderer ran but St
+- Panel button appears but dropdown is blank: the renderer ran but St
   rejected a widget operation. Look for `Clutter-CRITICAL` or `St-WARNING`
   in the journal around the same timestamp.
 
@@ -174,24 +174,28 @@ ps aux | grep "server/server.js" | grep -v grep
 ```
 
 If there's no node process, suspect `extension/lib/backend.js`'s
-`resolveNodePath()` — the gnome-shell launch environment may have a sparse
-`$PATH`. The fix is usually hardcoding `/usr/bin/node` as a fallback when
-`which node` returns empty.
+`resolveNodePath()`: the gnome-shell launch environment may have a
+sparse `$PATH`. The current resolver checks a static candidate list
+(`/usr/bin/node`, `/usr/local/bin/node`, `/snap/bin/node`,
+`/opt/homebrew/bin/node`, common nvm and user-local paths) before
+falling back to bare `node`; add new entries here, never re-introduce
+a synchronous `which` shell-out.
 
 ### Version drift
 
-GNOME APIs move between major versions. The extension declares support for
-shell-version `[45..48]` in `metadata.json`, but specific APIs we use can
-break:
+GNOME APIs move between major versions. The extension declares support
+for shell-version `[46, 47, 48]` in `metadata.json`, but specific APIs
+we use can still drift across patch versions:
 
-- `Soup.Message.new_request_body_from_bytes()` — invocation differs across
-  libsoup3 patch versions.
-- `St.ScrollView.set_child` vs `add_actor` — `set_child` is correct on
-  GNOME 46+; on 45 you need `add_actor`. The shim in
-  `extension/lib/render.js`'s `makeColumn()` handles this — test on every
-  supported version before relaxing the shim.
-- `PopupMenu.box.set_width()` may be ignored — the dropdown can clamp to
-  a default narrow width regardless of the setting.
+- `Soup.Message.new_request_body_from_bytes()` invocation differs across
+  libsoup3 patch versions. The working call is the setter form
+  `set_request_body_from_bytes(mime, GLib.Bytes)`, which the code uses.
+- `St.ScrollView.set_child` is the modern API; the legacy
+  `add_actor`/`set_child` shim has been removed now that shell 45 is no
+  longer supported.
+- `PopupMenu.box.set_width()` may be ignored: the dropdown can clamp to
+  a default narrow width regardless of the setting. Glance now drives
+  width via CSS `min-width` on `this.menu.box` instead.
 
 If you only test on one GNOME version, you have only tested on one GNOME
 version. CI doesn't catch this; only manually booting a nested shell on
@@ -229,7 +233,7 @@ rm -rf ~/.local/share/gnome-shell/extensions/glance@klarum-software.github.io/
       data
 - [ ] `journalctl --user --since "5 minutes ago" /usr/bin/gnome-shell |
       grep -i glance` is clean (no exceptions)
-- [ ] Disable + re-enable the extension twice — no leaks, no
+- [ ] Disable + re-enable the extension twice with no leaks and no
       "already-running backend" errors
 - [ ] If a gschema key was added/removed: `prefs.js` still opens and
       every visible control reads/writes correctly
@@ -254,9 +258,9 @@ If your change touches any of the above, the browser fallback is
 
 ## Related docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — design rationale, endpoints,
+- [ARCHITECTURE.md](ARCHITECTURE.md): design rationale, endpoints,
   lifecycle.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — dev loop, style, releasing.
-- [INSTALL.md](INSTALL.md) — per-OS install steps.
-- `EXTENSION-BEST-PRACTICES.md` (sibling file) — patterns that survive
+- [CONTRIBUTING.md](CONTRIBUTING.md): dev loop, style, releasing.
+- [INSTALL.md](INSTALL.md): per-OS install steps.
+- `EXTENSION-BEST-PRACTICES.md` (sibling file): patterns that survive
   shell-version upgrades.
