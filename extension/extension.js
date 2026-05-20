@@ -58,7 +58,7 @@ class GlanceIndicator extends PanelMenu.Button {
         item.set_x_expand(true);
 
         this._dashboard = new St.BoxLayout({
-            orientation: Clutter.Orientation.VERTICAL,
+            vertical: true,
             style_class: "glance-dashboard",
             x_expand: true,
             y_expand: true,

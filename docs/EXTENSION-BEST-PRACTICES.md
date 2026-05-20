@@ -136,9 +136,13 @@ That's the exact pattern `render.js:84` uses — keep it.
 - `Clutter.Color` was removed in 47 — use `Cogl.Color`.
   [gjs.guide/extensions/upgrading/gnome-shell-47](https://gjs.guide/extensions/upgrading/gnome-shell-47.html)
 - `Clutter.Image` removed in 48 — use `St.ImageContent`.
-- `vertical: true` is deprecated on St boxes in 48; prefer
-  `orientation: Clutter.Orientation.VERTICAL`. Still works in 48 but the
-  warning is loud in logs.
+- `St.BoxLayout` orientation API differs across the range. `orientation:
+  Clutter.Orientation.VERTICAL|HORIZONTAL` was added in shell 48; on 46/47
+  the property does not exist and the constructor throws "No property
+  orientation on StBoxLayout", which aborts `enable()`. The 46/47 idiom
+  is `vertical: true|false`, which still works in 48 (deprecated, with a
+  warning in the journal). For a project targeting 46-48, use `vertical:`.
+  Only switch to `orientation:` once the floor is 48+. (See issue #26.)
   [gjs.guide/extensions/upgrading/gnome-shell-48](https://gjs.guide/extensions/upgrading/gnome-shell-48.html)
 
 **Width on `menu.box`.** `set_width()` on a `PopupMenu`'s `.box` is a known
@@ -149,9 +153,11 @@ shell upgrade, this is where to look.
 [gnome-shell-extension-reference#PopupMenu styling](https://github.com/julio641742/gnome-shell-extension-reference/blob/master/tutorials/POPUPMENU-EXTENSION.md)
 
 **glance status.** `render.js:84` shim is correct. `extension.js:113`
-calls `set_width` on `menu.box` — see audit (S1). `vertical: true` is used
-throughout render.js — works through 48, but deprecation warnings will
-appear in logs.
+calls `set_width` on `menu.box` — see audit (S1). `vertical: true|false`
+is used throughout `extension.js` and `render.js`. This is the form that
+works on 46, 47, and 48 (with a deprecation warning on 48); the 48-only
+`orientation:` keyword caused issue #26 (extension failed to enable on
+46/47) and has been removed.
 
 ## 5. Subprocess hygiene (Gio.SubprocessLauncher)
 
@@ -380,10 +386,12 @@ brick the shell or leak; M = will warn loudly; L = stylistic / future-proof.
   GC'd, but explicit `= null` makes the lifecycle obvious and helps
   catch reentrancy bugs.
 
-- **[L] R1 — `extension/lib/render.js` (throughout).** `vertical: true` on
-  St boxes is deprecated as of shell 48. Works, but produces deprecation
-  warnings in the journal. When we drop shell 45/46, migrate to
-  `orientation: Clutter.Orientation.VERTICAL`.
+- **[L] R1 — `extension/lib/render.js` and `extension.js` (throughout).**
+  `vertical: true|false` on St boxes is deprecated as of shell 48 and
+  produces deprecation warnings in the journal. We use it deliberately
+  because the replacement, `orientation: Clutter.Orientation.X`, only
+  exists on shell 48 (issue #26). When the supported floor moves to 48+,
+  migrate to `orientation:` and silence the warning.
 
 - **[L] R2 — `extension/lib/render.js:84`.** The `add_actor` / `set_child`
   shim is correct. Keep it as long as `metadata.json` lists `"45"`. When
