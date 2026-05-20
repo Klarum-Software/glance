@@ -81,7 +81,7 @@ function makeColumn(label, tagClass, content) {
     });
     const inner = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: "glance-col-body", x_expand: true });
     for (const child of content.children) inner.add_child(child);
-    scroll.add_actor ? scroll.add_actor(inner) : scroll.set_child(inner);
+    scroll.set_child(inner);
     col.add_child(scroll);
 
     return col;
