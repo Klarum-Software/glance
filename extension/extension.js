@@ -26,6 +26,7 @@ class GlanceIndicator extends PanelMenu.Button {
         this._state     = null;
         this._refreshTimer = 0;
         this._handlerIds   = [];
+        this._cancellable  = new Gio.Cancellable();
 
         // ── panel button ────────────────────────────────────────────────
         const box = new St.BoxLayout({
@@ -130,17 +131,19 @@ class GlanceIndicator extends PanelMenu.Button {
 
     async _refresh() {
         if (!this._backend) return;
+        if (this._cancellable.is_cancelled()) return;
         try {
-            const state = await api.get(`${this._backend.url}/api/state`);
+            const state = await api.get(`${this._backend.url}/api/state`, this._cancellable);
             this._state = state;
             this._updatePanel(state);
             // Only rebuild dashboard contents when menu is open (cheap optimisation).
             if (this.menu.isOpen) {
                 renderDashboard(this._dashboard, state, {
-                    onOpenUrl: (url) => api.post(`${this._backend.url}/api/open`, { url }).catch(() => {}),
+                    onOpenUrl: (url) => api.post(`${this._backend.url}/api/open`, { url }, this._cancellable).catch(() => {}),
                 });
             }
         } catch (e) {
+            if (this._cancellable.is_cancelled()) return;
             this._label.text = "glance·offline";
             this._dot.style_class = "system-status-icon glance-dot offline";
             // If menu is open, surface the error
@@ -164,6 +167,7 @@ class GlanceIndicator extends PanelMenu.Button {
     }
 
     destroy() {
+        if (this._cancellable) this._cancellable.cancel();
         if (this._refreshTimer) {
             GLib.source_remove(this._refreshTimer);
             this._refreshTimer = 0;
