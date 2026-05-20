@@ -19,7 +19,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 BUS_SOCK="$RUNTIME_DIR/glance-dev.bus"
 BUS_PID_FILE="$RUNTIME_DIR/glance-dev.bus.pid"
-SHELL_PID_FILE="/tmp/glance-dev-shell.pid"
+SHELL_PID_FILE="$RUNTIME_DIR/glance-dev-shell.pid"
 SHELL_LOG="$RUNTIME_DIR/glance-dev-shell.log"
 
 NO_INSTALL=0
@@ -61,13 +61,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # State the trap may need to clean up. Populated as we go; trap is safe to fire
-# at any point.
+# at any point. OUR_BUS_ADDRESS is the reaper's authority: empty means the
+# dedicated bus is not yet up, so we must not touch any node backend (it could
+# be the user's host-session glance).
 SHELL_PID=""
 JOURNAL_PID=""
 BUS_PID=""
+OUR_BUS_ADDRESS=""
 
 cleanup() {
-  local code=$?
+  local code="${1:-$?}"
   trap - EXIT INT TERM
 
   if [[ -n "$JOURNAL_PID" ]] && kill -0 "$JOURNAL_PID" 2>/dev/null; then
@@ -93,18 +96,29 @@ cleanup() {
   fi
   if [[ -n "$BUS_PID" ]] && kill -0 "$BUS_PID" 2>/dev/null; then
     kill -TERM "$BUS_PID" 2>/dev/null || true
+    for _ in 1 2 3 4; do
+      kill -0 "$BUS_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$BUS_PID" 2>/dev/null; then
+      kill -KILL "$BUS_PID" 2>/dev/null || true
+    fi
   fi
 
-  # Reap any orphan glance backend that the nested shell spawned. Scope by the
-  # bus address env var so we never touch a backend running in the host session.
-  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-    local our_addr="$DBUS_SESSION_BUS_ADDRESS"
-    local pid env_addr orphans=()
+  # Reap any orphan glance backend that the nested shell spawned. Gate on
+  # OUR_BUS_ADDRESS (set only after the dedicated bus is confirmed up), not
+  # DBUS_SESSION_BUS_ADDRESS, which still points at the host bus until then.
+  if [[ -n "$OUR_BUS_ADDRESS" ]]; then
+    local our_addr="$OUR_BUS_ADDRESS"
+    local pid orphans=()
     while read -r pid; do
       [[ -z "$pid" ]] && continue
       [[ -r "/proc/$pid/environ" ]] || continue
+      # `local x=$(...)` masks the inner pipeline status from set -o pipefail,
+      # so a no-match grep does not abort cleanup mid-reap.
+      local env_addr
       env_addr=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-        | grep '^DBUS_SESSION_BUS_ADDRESS=' | head -1 | cut -d= -f2-)
+        | grep '^DBUS_SESSION_BUS_ADDRESS=' | head -1 | cut -d= -f2- || true)
       if [[ "$env_addr" == "$our_addr" ]]; then
         orphans+=("$pid")
       fi
@@ -117,10 +131,19 @@ cleanup() {
     fi
   fi
 
-  rm -f "$SHELL_PID_FILE" "$BUS_PID_FILE" "$BUS_SOCK" "$SHELL_LOG"
+  rm -f "$SHELL_PID_FILE" "$BUS_PID_FILE" "$BUS_SOCK"
+  # Preserve the nested-shell log on unexpected exits so the user has something
+  # to debug from. Clean shutdowns (0) and signal exits (130/143) discard it.
+  if [[ "$code" -eq 0 || "$code" -eq 130 || "$code" -eq 143 ]]; then
+    rm -f "$SHELL_LOG"
+  elif [[ -f "$SHELL_LOG" ]]; then
+    yellow "  preserved nested shell log at $SHELL_LOG"
+  fi
   exit "$code"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+trap cleanup EXIT
 
 # ── checks ─────────────────────────────────────────────────────────────────
 for cmd in dbus-daemon gdbus gnome-shell gnome-extensions journalctl; do
@@ -173,6 +196,10 @@ if [[ -z "$BUS_PID" ]] || ! kill -0 "$BUS_PID" 2>/dev/null; then
   exit 1
 fi
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$BUS_SOCK"
+# Arm the orphan reaper only now that the dedicated bus is confirmed up.
+# Anything that failed before this point would otherwise have scoped the reap
+# by the host bus address.
+OUR_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 echo "  bus pid: $BUS_PID  address: $DBUS_SESSION_BUS_ADDRESS"
 
 # ── launch nested gnome-shell ──────────────────────────────────────────────

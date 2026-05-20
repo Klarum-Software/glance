@@ -7,7 +7,8 @@
 
 set -euo pipefail
 
-SHELL_PID_FILE="/tmp/glance-dev-shell.pid"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+SHELL_PID_FILE="$RUNTIME_DIR/glance-dev-shell.pid"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 bold()   { printf "\033[1m%s\033[0m\n" "$*"; }
