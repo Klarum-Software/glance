@@ -21,7 +21,7 @@ export class Backend {
   start(onExit) {
     if (this._proc) return;
     const launcher = new Gio.SubprocessLauncher({
-      flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+      flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE,
     });
     launcher.setenv("GLANCE_PORT", String(this._port), true);
     launcher.setenv("GLANCE_HOST", this._host, true);
@@ -32,17 +32,41 @@ export class Backend {
       log(`[glance] backend spawn failed: ${e.message}`);
       this._proc = null;
       this._started = false;
+      if (onExit) onExit({ fastExit: true, status: -1, stderr: e.message });
       return;
     }
-    this._proc.wait_async(null, (p, res) => {
+    const spawnedAt = GLib.get_monotonic_time();
+    const proc = this._proc;
+    proc.wait_async(null, (p, res) => {
+      let status = 0;
       try { p.wait_finish(res); } catch (_) {}
-      this._started = false;
-      this._proc = null;
-      if (this._killTimer) {
-        GLib.Source.remove(this._killTimer);
-        this._killTimer = 0;
-      }
-      if (onExit) onExit();
+      try { status = p.get_exit_status(); } catch (_) {}
+      const fastExit = (GLib.get_monotonic_time() - spawnedAt) < 1_000_000;
+      this._readStderrFirstLine(p, (stderr) => {
+        log(`[glance] backend exited (status=${status}${fastExit ? ", fast" : ""})${stderr ? ": " + stderr : ""}`);
+        this._started = false;
+        this._proc = null;
+        if (this._killTimer) {
+          GLib.Source.remove(this._killTimer);
+          this._killTimer = 0;
+        }
+        if (onExit) onExit({ fastExit, status, stderr });
+      });
+    });
+  }
+
+  _readStderrFirstLine(proc, done) {
+    const stream = proc.get_stderr_pipe();
+    if (!stream) return done("");
+    const data = new Gio.DataInputStream({ base_stream: stream });
+    data.read_line_async(GLib.PRIORITY_DEFAULT, null, (s, res) => {
+      let line = "";
+      try {
+        const [bytes] = s.read_line_finish(res);
+        if (bytes) line = new TextDecoder().decode(bytes).trim();
+      } catch (_) {}
+      try { stream.close(null); } catch (_) {}
+      done(line);
     });
   }
 
