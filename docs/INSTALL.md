@@ -1,6 +1,6 @@
 # Install
 
-Three install paths depending on your OS. All are idempotent — re-run to update.
+Three install paths depending on your OS. All are idempotent (re-run to update).
 
 ## Linux + GNOME (recommended)
 
@@ -67,7 +67,7 @@ What it does:
 1. Verifies `node >=18`.
 2. Writes `~/Library/LaunchAgents/com.klarum.glance.plist` with absolute paths
    substituted from your repo location and node binary location.
-3. `launchctl load`s the agent — backend starts immediately and at every login.
+3. `launchctl load`s the agent; backend starts immediately and at every login.
 
 Open <http://127.0.0.1:5175/> for the dashboard.
 
