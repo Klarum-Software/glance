@@ -67,19 +67,21 @@ export function resolveServerPath(explicit, extensionDir) {
   return null;
 }
 
-// Find node — try `which node`, then common paths.
+// Find node — checks common install paths, then falls back to bare "node"
+// (resolved via $PATH by the subprocess launcher). The previous version
+// shelled out to `which node` synchronously, which freezes the compositor
+// on a cold PATH or slow filesystem.
 export function resolveNodePath() {
-  const candidates = ["/usr/bin/node", "/usr/local/bin/node", "/snap/bin/node"];
-  // try $PATH lookup
-  try {
-    const [ok, out] = GLib.spawn_command_line_sync("which node");
-    if (ok && out) {
-      const path = new TextDecoder().decode(out).trim();
-      if (path) return path;
-    }
-  } catch (_) {}
+  const candidates = [
+    "/usr/bin/node",
+    "/usr/local/bin/node",
+    "/snap/bin/node",
+    "/opt/homebrew/bin/node",
+    GLib.build_filenamev([GLib.get_home_dir(), ".nvm", "current", "bin", "node"]),
+    GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "node"]),
+  ];
   for (const p of candidates) {
     if (GLib.file_test(p, GLib.FileTest.EXISTS)) return p;
   }
-  return "node"; // last resort: hope $PATH resolves it in the subprocess
+  return "node";
 }
