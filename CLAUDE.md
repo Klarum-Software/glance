@@ -28,21 +28,6 @@ Repo: <https://github.com/Klarum-Software/glance>.
 activity, git context, sparklines). Not work-in-flight; reference when the
 user asks "what's next for REMOTE."
 
-## Current work queue
-
-A code audit produced 11 GitHub issues against the extension. PRs #12-21
-address issues #1-10; review and merge them rather than rewriting from
-scratch. Issue #11 (`metadata.json`: declare `session-modes` explicitly)
-has no PR yet and is trivial.
-
-```bash
-gh pr list --repo Klarum-Software/glance
-gh issue list --repo Klarum-Software/glance
-```
-
-The audit rationale and severity for each item lives in the "Audit of
-current code" section of EXTENSION-BEST-PRACTICES.md.
-
 ## Hard conventions
 
 - **Zero npm deps in `server/`.** The appeal is "clone and run." Don't add
@@ -55,6 +40,8 @@ current code" section of EXTENSION-BEST-PRACTICES.md.
   2-space indent (Node convention).** Match the file you're editing.
 - **No em-dashes in project markdown.** Use periods, commas, parens, or
   colons.
+- **No emojis anywhere.** Not in code, not in docs, not in commit messages,
+  not in PR descriptions.
 - **Don't push directly to `origin/main`** for non-trivial work. Open a
   PR. The previous v0.1.0 commits went straight to main; new feature and
   fix work should go through review.
@@ -69,11 +56,10 @@ current code" section of EXTENSION-BEST-PRACTICES.md.
   is an extension and not a PWA shortcut.
 - Don't try to reload the extension by restarting gnome-shell on Wayland;
   it kills the session. Iterate in a nested shell per TESTING.md.
-- Don't refactor untouched code while fixing something else. The 10 open
-  fix PRs each touch one concern by design; preserve that discipline.
+- Don't refactor untouched code while fixing something else. One concern
+  per PR.
 
 ## When you open a fresh session
 
-Ask the user what they're working on, then orient against the open PRs and
-issue list above. The v0.1.0 scaffold is shipped; current work is
-extension hardening from the audit, then the REMOTE roadmap features.
+Ask the user what they're working on. Check `gh pr list` and `gh issue list`
+for in-flight work before assuming the audit items are still outstanding.
