@@ -1,5 +1,8 @@
 // glance — GNOME Shell extension.
 // Top-panel button → dropdown dashboard fed by a local Node.js backend.
+// Same dashboard can be popped out as a draggable, resizable standalone
+// chrome window. Layout is configurable: which widgets appear, in what
+// order, with what relative size.
 
 import GObject     from "gi://GObject";
 import GLib        from "gi://GLib";
@@ -14,8 +17,9 @@ import * as PopupMenu  from "resource:///org/gnome/shell/ui/popupMenu.js";
 
 import { Backend, resolveServerPath, resolveNodePath } from "./lib/backend.js";
 import * as api    from "./lib/api.js";
-import * as fmt    from "./lib/format.js";
-import { renderDashboard } from "./lib/render.js";
+import { renderDashboard, moveWidget, resizeWidget, setWidgetEnabled } from "./lib/render.js";
+import { parseLayout, serializeLayout } from "./lib/widgets.js";
+import { PopoutWindow, addPopoutToShell, removePopoutFromShell } from "./lib/popout.js";
 
 const GlanceIndicator = GObject.registerClass(
 class GlanceIndicator extends PanelMenu.Button {
@@ -27,6 +31,7 @@ class GlanceIndicator extends PanelMenu.Button {
         this._refreshTimer = 0;
         this._handlerIds   = [];
         this._cancellable  = new Gio.Cancellable();
+        this._popout      = null;
 
         // ── panel button ────────────────────────────────────────────────
         const box = new St.BoxLayout({
@@ -63,9 +68,8 @@ class GlanceIndicator extends PanelMenu.Button {
             x_expand: true,
             y_expand: true,
         });
-        // Initial placeholder
         const placeholder = new St.Label({
-            text: "starting glance backend…",
+            text: "starting glance backend...",
             style_class: "glance-placeholder",
             x_expand: true,
         });
@@ -74,10 +78,20 @@ class GlanceIndicator extends PanelMenu.Button {
         item.add_child(this._dashboard);
         this.menu.addMenuItem(item);
 
-        // Resize the menu dynamically when opened.
         this._handlerIds.push([this.menu, this.menu.connect("open-state-changed", (_m, open) => {
             if (open) this._onOpen();
         })]);
+
+        // Track layout changes so an edit in prefs is reflected immediately.
+        this._handlerIds.push([this._settings, this._settings.connect("changed::widget-layout", () => this._rerender())]);
+        this._handlerIds.push([this._settings, this._settings.connect("changed::edit-mode",     () => this._rerender())]);
+        this._handlerIds.push([this._settings, this._settings.connect("changed::popout-active", () => {
+            const want = this._settings.get_boolean("popout-active");
+            if (want && !this._popout) this._openPopout();
+            else if (!want && this._popout) this._closePopout();
+        })]);
+        this._handlerIds.push([this._settings, this._settings.connect("changed::popout-width",  () => this._reflowPopout())]);
+        this._handlerIds.push([this._settings, this._settings.connect("changed::popout-height", () => this._reflowPopout())]);
 
         // ── backend ─────────────────────────────────────────────────────
         const port = this._settings.get_int("backend-port");
@@ -101,6 +115,10 @@ class GlanceIndicator extends PanelMenu.Button {
         }
 
         this._startPolling();
+
+        if (this._settings.get_boolean("popout-active")) {
+            this._openPopout();
+        }
     }
 
     _showError(msg) {
@@ -113,7 +131,6 @@ class GlanceIndicator extends PanelMenu.Button {
     }
 
     _onOpen() {
-        // Resize to a percentage of the primary monitor width.
         const monitor = Main.layoutManager.primaryMonitor;
         const pct = Math.max(30, Math.min(100, this._settings.get_int("dropdown-width-pct"))) / 100;
         const width  = Math.floor(monitor.width  * pct);
@@ -121,8 +138,7 @@ class GlanceIndicator extends PanelMenu.Button {
         // set_width is clamped by PopupMenu on some shell versions; min-width via
         // inline style on our .glance-menu style_class survives the clamp.
         this.menu.box.set_style(`min-width: ${width}px;`);
-        this._dashboard.set_style(`min-width: ${width - 24}px; min-height: ${height}px;`);
-        // Immediate refresh on open so data is fresh.
+        this._dashboard.set_style(`min-width: ${width - 24}px; height: ${height}px;`);
         this._refresh();
     }
 
@@ -142,23 +158,94 @@ class GlanceIndicator extends PanelMenu.Button {
             const state = await api.get(`${this._backend.url}/api/state`, this._cancellable);
             this._state = state;
             this._updatePanel(state);
-            // Only rebuild dashboard contents when menu is open (cheap optimisation).
-            if (this.menu.isOpen) {
-                renderDashboard(this._dashboard, state, {
-                    onOpenUrl: (url) => api.post(`${this._backend.url}/api/open`, { url }, this._cancellable).catch(() => {}),
-                });
-            }
+            this._rerender();
         } catch (e) {
             if (this._cancellable.is_cancelled()) return;
             this._label.text = "glance·offline";
             this._dot.style_class = "system-status-icon glance-dot offline";
-            // If menu is open, surface the error
             if (this.menu.isOpen) this._showError(`backend unreachable at ${this._backend.url} (${e.message})`);
+            if (this._popout)     this._showPopoutError(`backend unreachable at ${this._backend.url} (${e.message})`);
         }
     }
 
+    _rerender() {
+        if (!this._state) return;
+        const base = this._renderOpts();
+        if (this.menu.isOpen) {
+            renderDashboard(this._dashboard, this._state, { ...base, onPopOut: () => this._openPopout() });
+        }
+        if (this._popout) {
+            renderDashboard(this._popout.contentBox, this._state, { ...base, onClosePopOut: () => this._closePopout() });
+        }
+    }
+
+    _renderOpts() {
+        const layoutJson = this._settings.get_string("widget-layout");
+        const editMode   = this._settings.get_boolean("edit-mode");
+        return {
+            layoutJson,
+            editMode,
+            onOpenUrl:       (url) => this._openUrl(url),
+            onToggleEdit:    () => this._settings.set_boolean("edit-mode", !editMode),
+            onMoveWidget:    (id, dir) => this._mutateLayout(layout => moveWidget(layout, id, dir)),
+            onResizeWidget:  (id, dir) => this._mutateLayout(layout => resizeWidget(layout, id, dir)),
+            onHideWidget:    (id)      => this._mutateLayout(layout => setWidgetEnabled(layout, id, false)),
+        };
+    }
+
+    _openUrl(url) {
+        if (!this._backend || !url) return;
+        api.post(`${this._backend.url}/api/open`, { url }, this._cancellable).catch(() => {});
+    }
+
+    _mutateLayout(fn) {
+        const layout = parseLayout(this._settings.get_string("widget-layout"));
+        const next   = fn(layout);
+        this._settings.set_string("widget-layout", serializeLayout(next));
+    }
+
+    _showPopoutError(msg) {
+        if (!this._popout) return;
+        const body = this._popout.contentBox;
+        body.destroy_all_children();
+        body.add_child(new St.Label({ text: `glance: ${msg}`, style_class: "glance-error", x_expand: true }));
+    }
+
+    // ── pop-out window ──────────────────────────────────────────────────
+
+    _openPopout() {
+        if (this._popout) return;
+        const x = this._settings.get_int("popout-x");
+        const y = this._settings.get_int("popout-y");
+        const w = this._settings.get_int("popout-width");
+        const h = this._settings.get_int("popout-height");
+        this._popout = new PopoutWindow({
+            x, y, width: w, height: h,
+            onClose: () => this._closePopout(),
+            onMove:  (nx, ny) => { this._settings.set_int("popout-x", nx); this._settings.set_int("popout-y", ny); },
+        });
+        addPopoutToShell(this._popout);
+        this._popout.addGrip();
+        this._settings.set_boolean("popout-active", true);
+        if (this._state) this._rerender();
+    }
+
+    _closePopout() {
+        if (!this._popout) return;
+        removePopoutFromShell(this._popout);
+        this._popout.destroy();
+        this._popout = null;
+        this._settings.set_boolean("popout-active", false);
+    }
+
+    _reflowPopout() {
+        if (!this._popout) return;
+        const w = this._settings.get_int("popout-width");
+        const h = this._settings.get_int("popout-height");
+        this._popout.sizeTo(w, h);
+    }
+
     _updatePanel(state) {
-        // Compact summary in the top panel: P1 count + overdue + sessions.
         const lin = state.linear || { total: 0, overdue: 0, items: [] };
         const p1 = (lin.items || []).filter(i => i.priority === 1).length;
         const overdue = lin.overdue || 0;
@@ -182,6 +269,11 @@ class GlanceIndicator extends PanelMenu.Button {
             try { obj.disconnect(id); } catch (_) {}
         }
         this._handlerIds.length = 0;
+        if (this._popout) {
+            removePopoutFromShell(this._popout);
+            this._popout.destroy();
+            this._popout = null;
+        }
         if (this._backend && this._extension._settings.get_boolean("auto-start-backend")) {
             this._backend.stop();
         }
