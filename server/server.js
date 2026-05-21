@@ -132,6 +132,55 @@ async function gatherManualPeers() {
   }));
 }
 
+// In-memory ring buffer of recent load_1m/mem_pct samples per peer, used to
+// render the Unicode sparklines in the REMOTE column. Lost on restart by
+// design (no DB, no deps). Keyed by hostname+ip so an IP rotation doesn't
+// duplicate the series.
+const REMOTE_HISTORY = new Map();
+const REMOTE_HISTORY_LEN = 32;
+const SPARK_GLYPHS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+function peerKey(peer) {
+  return `${peer.hostname || "?"}@${peer.ip || "?"}`;
+}
+
+function pushSample(peer) {
+  if (!peer.snapshot) return;
+  const key = peerKey(peer);
+  let hist = REMOTE_HISTORY.get(key);
+  if (!hist) { hist = { load: [], mem: [] }; REMOTE_HISTORY.set(key, hist); }
+  if (Number.isFinite(peer.snapshot.load_1m)) {
+    hist.load.push(peer.snapshot.load_1m);
+    if (hist.load.length > REMOTE_HISTORY_LEN) hist.load.shift();
+  }
+  if (Number.isFinite(peer.snapshot.mem_pct)) {
+    hist.mem.push(peer.snapshot.mem_pct);
+    if (hist.mem.length > REMOTE_HISTORY_LEN) hist.mem.shift();
+  }
+}
+
+function sparkline(samples, scaleMax) {
+  if (!samples || !samples.length) return null;
+  const max = scaleMax != null ? scaleMax : Math.max(0.5, ...samples);
+  return samples
+    .map(v => {
+      if (!Number.isFinite(v)) return SPARK_GLYPHS[0];
+      const i = Math.max(0, Math.min(SPARK_GLYPHS.length - 1,
+        Math.round((v / max) * (SPARK_GLYPHS.length - 1))));
+      return SPARK_GLYPHS[i];
+    })
+    .join("");
+}
+
+function decorateWithSparks(peer) {
+  if (!peer.snapshot) return peer;
+  const hist = REMOTE_HISTORY.get(peerKey(peer));
+  if (!hist) return peer;
+  peer.snapshot.spark_load = sparkline(hist.load);
+  peer.snapshot.spark_mem  = sparkline(hist.mem, 100);
+  return peer;
+}
+
 async function gatherRemote() {
   const manualP = gatherManualPeers();
 
@@ -179,6 +228,8 @@ async function gatherRemote() {
 
   const manual = await manualP;
   const peers = [...tsPeers, ...manual];
+
+  for (const p of peers) { pushSample(p); decorateWithSparks(p); }
 
   peers.sort((a, b) => {
     if (a.is_self !== b.is_self) return a.is_self ? -1 : 1;

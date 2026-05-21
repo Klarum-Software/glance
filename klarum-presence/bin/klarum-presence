@@ -1,0 +1,55 @@
+#!/usr/bin/env node
+// klarum-presence agent. Listens on a tailnet-reachable port and serves the
+// current presence snapshot at GET /presence. Zero npm dependencies.
+//
+//   KLARUM_PRESENCE_PORT  (default 5176)
+//   KLARUM_PRESENCE_HOST  (default 0.0.0.0 — must be reachable on the tailnet)
+//
+// To bind only to a specific tailnet interface, set HOST to the Tailscale IP
+// for this peer. The default 0.0.0.0 is fine on machines where Tailscale's
+// ACL is the only authentication path.
+
+"use strict";
+
+const http = require("http");
+const path = require("path");
+
+const { snapshot } = require(path.join(__dirname, "..", "lib", "presence"));
+
+const PORT = Number(process.env.KLARUM_PRESENCE_PORT) || 5176;
+const HOST = process.env.KLARUM_PRESENCE_HOST || "0.0.0.0";
+
+function send(res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  });
+  res.end(json);
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "GET" && (req.url === "/presence" || req.url === "/")) {
+      const snap = await snapshot();
+      return send(res, 200, snap);
+    }
+    if (req.method === "GET" && req.url === "/health") {
+      return send(res, 200, { ok: true });
+    }
+    send(res, 404, { error: "not found" });
+  } catch (e) {
+    send(res, 500, { error: e.message });
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`klarum-presence listening on http://${HOST}:${PORT}/presence`);
+});
+
+function shutdown() {
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 2000).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT",  shutdown);

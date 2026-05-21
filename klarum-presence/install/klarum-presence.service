@@ -1,0 +1,17 @@
+[Unit]
+Description=klarum-presence agent
+Documentation=https://github.com/Klarum-Software/glance
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env node %h/.local/share/klarum-presence/bin/klarum-presence
+Restart=on-failure
+RestartSec=5
+Environment=KLARUM_PRESENCE_PORT=5176
+# Bind to all interfaces by default; the tailnet's WireGuard auth is the
+# access control. To restrict, set this to a specific Tailscale IP.
+Environment=KLARUM_PRESENCE_HOST=0.0.0.0
+
+[Install]
+WantedBy=default.target

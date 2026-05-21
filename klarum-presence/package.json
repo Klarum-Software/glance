@@ -1,0 +1,17 @@
+{
+  "name": "klarum-presence",
+  "version": "0.1.0",
+  "description": "Per-host presence agent for klarum/glance. Exposes /presence over the tailnet so a central viewer can see what each peer is doing right now.",
+  "license": "MIT",
+  "main": "lib/presence.js",
+  "bin": {
+    "klarum-presence": "bin/klarum-presence"
+  },
+  "scripts": {
+    "start": "node bin/klarum-presence",
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

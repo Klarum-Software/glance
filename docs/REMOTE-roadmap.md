@@ -1,11 +1,17 @@
 # REMOTE column — roadmap
 
 The REMOTE column shows tailnet peers running the `klarum-presence` agent.
-Today it surfaces hostname, OS, IP, online/offline, agent reachability, and
-"last seen". This document captures concrete features to add next, ranked by
-operator value relative to implementation cost. Each item is scoped to fit
-the zero-deps, pull-based, tailnet-local architecture described in
+This document captures concrete features to add next, ranked by operator
+value relative to implementation cost. Each item is scoped to fit the
+zero-deps, pull-based, tailnet-local architecture described in
 [ARCHITECTURE.md](ARCHITECTURE.md).
+
+> **Status as of 2026-05-21**: items 1 (tmux + agent activity), 2 (per-peer
+> git context), and 3 (sparklines) are now implemented. Items 1 and 2 live
+> in the [klarum-presence/](../klarum-presence/) agent. Item 3 (sparklines)
+> lives in `server/server.js` — the server keeps an in-memory ring buffer
+> per peer and stamps `spark_load` / `spark_mem` strings onto each snapshot
+> before returning the state.
 
 ## Top 3 features to add next
 

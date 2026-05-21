@@ -80,9 +80,16 @@ glance/
 │   ├── config.js           ~/.config/glance/config.json loader
 │   └── platform/           OS adapters
 ├── public/               Browser dashboard (used by the backend for dev)
+├── klarum-presence/      per-peer presence agent (self-contained, extractable)
 ├── install/              Installer
 └── docs/                 ARCHITECTURE, INSTALL, CONTRIBUTING
 ```
+
+The `klarum-presence/` agent is shipped in-tree but is otherwise self
+contained (zero npm deps, no glance imports). Install it on each peer that
+should appear in the REMOTE column; see
+[klarum-presence/README.md](klarum-presence/README.md) for the extraction
+recipe when it eventually lives in its own repository.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
