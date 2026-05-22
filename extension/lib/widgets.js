@@ -47,14 +47,12 @@ export function emptyRow(text) {
 
 export function clickableRow(child, onClick) {
     if (!onClick) return child;
-    const btn = new St.Button({
-        style_class: "glance-row-btn",
-        child,
-        x_expand: true,
-        can_focus: true,
-    });
-    btn.connect("clicked", () => onClick());
-    return btn;
+    child.reactive    = true;
+    child.can_focus   = true;
+    child.track_hover = true;
+    child.add_style_class_name("glance-row-btn");
+    child.connect("button-release-event", () => { onClick(); return Clutter.EVENT_STOP; });
+    return child;
 }
 
 // ── REMOTE ──────────────────────────────────────────────────────────────
@@ -160,16 +158,21 @@ function renderLinear(state, opts) {
         children.push(emptyRow("nothing assigned"));
         return { meta: `· ${lin.total || 0} open · ${lin.overdue || 0} overdue`, children };
     }
+    const mkLabel = (text, styleClass, extra = {}) => {
+        const l = new St.Label({ text, style_class: styleClass, y_align: Clutter.ActorAlign.CENTER, x_align: Clutter.ActorAlign.START, ...extra });
+        l.clutter_text.x_align = Clutter.ActorAlign.START;
+        return l;
+    };
     for (const i of lin.items) {
         const row = new St.BoxLayout({ vertical: false, style_class: "glance-li", x_expand: true, x_align: Clutter.ActorAlign.FILL });
-        row.add_child(new St.Label({ text: i.identifier, style_class: "glance-li-id", y_align: Clutter.ActorAlign.CENTER }));
+        row.add_child(mkLabel(i.identifier, "glance-li-id"));
         const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
         const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";
-        row.add_child(new St.Label({ text: pLabel, style_class: `glance-li-prio ${pClass}`, y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(new St.Label({ text: i.state_name || "", style_class: "glance-li-state", y_align: Clutter.ActorAlign.CENTER }));
+        row.add_child(mkLabel(pLabel, `glance-li-prio ${pClass}`));
+        row.add_child(mkLabel(i.state_name || "", "glance-li-state"));
         const dueText = i.due_date ? i.due_date.slice(5) : "";
-        row.add_child(new St.Label({ text: dueText, style_class: "glance-li-due " + (i.overdue ? "overdue" : ""), y_align: Clutter.ActorAlign.CENTER }));
-        const title = new St.Label({ text: i.title || "", style_class: "glance-li-title", y_align: Clutter.ActorAlign.CENTER, x_expand: true });
+        row.add_child(mkLabel(dueText, "glance-li-due " + (i.overdue ? "overdue" : "")));
+        const title = mkLabel(i.title || "", "glance-li-title", { x_expand: true });
         title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         row.add_child(title);
         children.push(clickableRow(row, () => opts.onOpenUrl && i.url && opts.onOpenUrl(i.url)));
