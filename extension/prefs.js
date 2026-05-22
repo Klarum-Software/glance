@@ -69,6 +69,10 @@ export default class GlancePrefs extends ExtensionPreferences {
         window.add(popoutPage);
         popoutPage.add(makePopoutGroup(settings));
 
+        const customPage = new Adw.PreferencesPage({ title: "Custom", icon_name: "network-transmit-receive-symbolic" });
+        window.add(customPage);
+        customPage.add(makeCustomWidgetsGroup(window, settings, cleanups));
+
         // Adw.PreferencesWindow may be opened and closed repeatedly without
         // the extension reloading. Disconnect every signal we wired so the
         // rebuild closures (and the rowsBox they capture) are eligible for GC.
@@ -224,4 +228,239 @@ function makePopoutGroup(settings) {
     group.add(makeSpin(settings, "popout-height", "Height (px)", 240, 4096, 10));
 
     return group;
+}
+
+// ── custom HTTP-endpoint widgets ────────────────────────────────────────
+
+const CUSTOM_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const CUSTOM_VIEWS = ["auto", "kv", "list", "raw"];
+
+function parseCustomWidgets(json) {
+    let raw;
+    try { raw = JSON.parse(json || "[]"); } catch { raw = []; }
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(e => e && typeof e.id === "string");
+}
+
+function serializeCustomWidgets(list) {
+    return JSON.stringify(list.map(e => ({
+        id:         e.id,
+        name:       e.name || e.id,
+        url:        e.url || "",
+        refreshSec: Number.isFinite(e.refreshSec) ? e.refreshSec : 60,
+        view:       CUSTOM_VIEWS.includes(e.view) ? e.view : "auto",
+        ...(e.jsonPath ? { jsonPath: e.jsonPath } : {}),
+        ...(e.headers && Object.keys(e.headers).length ? { headers: e.headers } : {}),
+    })));
+}
+
+function makeCustomWidgetsGroup(window, settings, cleanups) {
+    const group = new Adw.PreferencesGroup({
+        title: "Custom HTTP endpoints",
+        description: "Each entry polls a URL and renders its JSON response as a dashboard column. URLs are sent to the local backend, which fetches them on the configured interval.",
+    });
+
+    const list = new Gtk.ListBox({
+        selection_mode: Gtk.SelectionMode.NONE,
+        css_classes: ["boxed-list"],
+    });
+
+    const rebuild = () => {
+        let row = list.get_first_child();
+        while (row) {
+            const next = row.get_next_sibling();
+            list.remove(row);
+            row = next;
+        }
+        const entries = parseCustomWidgets(settings.get_string("custom-widgets"));
+        if (!entries.length) {
+            const empty = new Adw.ActionRow({ title: "No custom widgets yet", subtitle: "Click Add to create one." });
+            list.append(empty);
+        }
+        entries.forEach((entry, idx) => {
+            list.append(makeCustomWidgetRow({
+                window, entry,
+                onEdit: () => openCustomWidgetDialog(window, settings, entry, idx),
+                onDelete: () => {
+                    const next = parseCustomWidgets(settings.get_string("custom-widgets"));
+                    next.splice(idx, 1);
+                    settings.set_string("custom-widgets", serializeCustomWidgets(next));
+                },
+            }));
+        });
+    };
+
+    rebuild();
+    const sigId = settings.connect("changed::custom-widgets", rebuild);
+    if (cleanups) cleanups.push(() => settings.disconnect(sigId));
+
+    const wrapper = new Adw.PreferencesRow({ activatable: false, focusable: false });
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+    box.append(list);
+    wrapper.set_child(box);
+    group.add(wrapper);
+
+    const addRow = new Adw.ActionRow({ title: "Add custom widget", activatable: true });
+    const addBtn = new Gtk.Button({ icon_name: "list-add-symbolic", valign: Gtk.Align.CENTER });
+    addBtn.connect("clicked", () => openCustomWidgetDialog(window, settings, null, -1));
+    addRow.add_suffix(addBtn);
+    addRow.set_activatable_widget(addBtn);
+    group.add(addRow);
+
+    return group;
+}
+
+function makeCustomWidgetRow({ entry, onEdit, onDelete }) {
+    const row = new Adw.ActionRow({
+        title:    entry.name || entry.id,
+        subtitle: `${entry.url}  ·  every ${entry.refreshSec || 60}s  ·  ${entry.view || "auto"}`,
+    });
+    const editBtn = new Gtk.Button({ icon_name: "document-edit-symbolic", valign: Gtk.Align.CENTER });
+    editBtn.connect("clicked", onEdit);
+    row.add_suffix(editBtn);
+    const delBtn = new Gtk.Button({ icon_name: "user-trash-symbolic", valign: Gtk.Align.CENTER, css_classes: ["destructive-action"] });
+    delBtn.connect("clicked", onDelete);
+    row.add_suffix(delBtn);
+    return row;
+}
+
+function openCustomWidgetDialog(parent, settings, entry, index) {
+    const isNew = !entry || index < 0;
+    const dialog = new Adw.PreferencesWindow({
+        title: isNew ? "Add custom widget" : "Edit custom widget",
+        modal: true,
+        transient_for: parent,
+        default_width: 520,
+        default_height: 480,
+    });
+    const page = new Adw.PreferencesPage();
+    dialog.add(page);
+
+    const fields = new Adw.PreferencesGroup({ title: "Endpoint" });
+    page.add(fields);
+
+    const idRow = new Adw.EntryRow({ title: "ID (a-z, 0-9, _, -)" });
+    idRow.set_text(entry?.id || "");
+    if (!isNew) idRow.set_sensitive(false);
+    fields.add(idRow);
+
+    const nameRow = new Adw.EntryRow({ title: "Display name" });
+    nameRow.set_text(entry?.name || "");
+    fields.add(nameRow);
+
+    const urlRow = new Adw.EntryRow({ title: "URL (http/https)" });
+    urlRow.set_text(entry?.url || "");
+    fields.add(urlRow);
+
+    const refreshRow = new Adw.SpinRow({
+        title: "Refresh (seconds)",
+        adjustment: new Gtk.Adjustment({ lower: 5, upper: 3600, step_increment: 5, value: entry?.refreshSec || 60 }),
+    });
+    fields.add(refreshRow);
+
+    const viewModel = new Gtk.StringList();
+    for (const v of CUSTOM_VIEWS) viewModel.append(v);
+    const viewRow = new Adw.ComboRow({ title: "View", model: viewModel });
+    const idx = CUSTOM_VIEWS.indexOf(entry?.view || "auto");
+    viewRow.set_selected(idx >= 0 ? idx : 0);
+    fields.add(viewRow);
+
+    const jsonPathRow = new Adw.EntryRow({ title: "JSON path (optional, e.g. data.items)" });
+    jsonPathRow.set_text(entry?.jsonPath || "");
+    fields.add(jsonPathRow);
+
+    const headers = new Adw.PreferencesGroup({
+        title: "Headers (optional)",
+        description: "One header per line, formatted as Name: Value.",
+    });
+    page.add(headers);
+
+    const headerView = new Gtk.TextView({
+        monospace: true,
+        wrap_mode: Gtk.WrapMode.WORD_CHAR,
+        height_request: 96,
+    });
+    const headerScroll = new Gtk.ScrolledWindow({ hexpand: true, vexpand: false, child: headerView });
+    const headerRow = new Adw.PreferencesRow({ activatable: false, focusable: false });
+    headerRow.set_child(headerScroll);
+    headers.add(headerRow);
+
+    const headerTextInitial = entry?.headers
+        ? Object.entries(entry.headers).map(([k, v]) => `${k}: ${v}`).join("\n")
+        : "";
+    headerView.buffer.set_text(headerTextInitial, headerTextInitial.length);
+
+    const actions = new Adw.PreferencesGroup();
+    page.add(actions);
+
+    const statusRow = new Adw.ActionRow({ title: "" });
+    const statusLabel = new Gtk.Label({ label: "", xalign: 0, css_classes: ["error"] });
+    statusRow.add_prefix(statusLabel);
+    actions.add(statusRow);
+
+    const saveRow = new Adw.ActionRow({ title: "" });
+    const cancelBtn = new Gtk.Button({ label: "Cancel", valign: Gtk.Align.CENTER });
+    cancelBtn.connect("clicked", () => dialog.close());
+    saveRow.add_suffix(cancelBtn);
+    const saveBtn = new Gtk.Button({ label: isNew ? "Add" : "Save", valign: Gtk.Align.CENTER, css_classes: ["suggested-action"] });
+    saveRow.add_suffix(saveBtn);
+    actions.add(saveRow);
+
+    saveBtn.connect("clicked", () => {
+        const id = idRow.get_text().trim();
+        const name = nameRow.get_text().trim();
+        const url = urlRow.get_text().trim();
+        const refreshSec = Math.max(5, Math.min(3600, refreshRow.get_value() | 0));
+        const view = CUSTOM_VIEWS[viewRow.get_selected()] || "auto";
+        const jsonPath = jsonPathRow.get_text().trim();
+
+        if (!CUSTOM_ID_RE.test(id)) {
+            statusLabel.set_label("id must start with a letter and contain only a-z, 0-9, _, -");
+            return;
+        }
+        if (!name) { statusLabel.set_label("display name is required"); return; }
+        try {
+            const u = new URL(url);
+            if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("must be http or https");
+        } catch (e) {
+            statusLabel.set_label("invalid URL: " + e.message);
+            return;
+        }
+
+        const headerText = headerView.buffer.text || "";
+        const parsedHeaders = {};
+        for (const line of headerText.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const sep = trimmed.indexOf(":");
+            if (sep <= 0) {
+                statusLabel.set_label(`bad header line: "${trimmed}"`);
+                return;
+            }
+            const k = trimmed.slice(0, sep).trim();
+            const v = trimmed.slice(sep + 1).trim();
+            if (!/^[A-Za-z0-9-]+$/.test(k)) {
+                statusLabel.set_label(`header name "${k}" must match [A-Za-z0-9-]`);
+                return;
+            }
+            parsedHeaders[k] = v;
+        }
+
+        const next = parseCustomWidgets(settings.get_string("custom-widgets"));
+        if (isNew && next.some(e => e.id === id)) {
+            statusLabel.set_label(`id "${id}" already exists`);
+            return;
+        }
+        const updated = { id, name, url, refreshSec, view };
+        if (jsonPath) updated.jsonPath = jsonPath;
+        if (Object.keys(parsedHeaders).length) updated.headers = parsedHeaders;
+
+        if (isNew) next.push(updated);
+        else next[index] = updated;
+
+        settings.set_string("custom-widgets", serializeCustomWidgets(next));
+        dialog.close();
+    });
+
+    dialog.present();
 }

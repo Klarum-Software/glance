@@ -1,10 +1,11 @@
-// Standalone dashboard window. Implemented as a Main.layoutManager chrome
-// actor with a draggable header and a corner resize grip. Renders the same
-// dashboard the dropdown does, driven by the same state polling.
+// Standalone dashboard window. A Main.layoutManager chrome actor that
+// behaves like a small window: drag the header to move, drag the corner /
+// edges to resize. Renders the same dashboard the dropdown does.
 //
-// The outer container uses Clutter.BinLayout so the resize grip can overlay
-// the bottom-right corner without participating in the vertical box flow
-// of header + body.
+// The outer container uses Clutter.BinLayout so the resize zones can
+// overlay the vertical stack of header + body without participating in its
+// flow. Each zone is its own reactive St.Widget child, sized explicitly so
+// BinLayout positions it at the right edge / bottom edge / corner.
 
 import Clutter from "gi://Clutter";
 import GObject from "gi://GObject";
@@ -12,9 +13,10 @@ import St      from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
-const MIN_W    = 400;
-const MIN_H    = 240;
-const GRIP_PX  = 18;
+const MIN_W      = 400;
+const MIN_H      = 240;
+const CORNER_PX  = 28;
+const EDGE_PX    = 10;
 
 export const PopoutWindow = GObject.registerClass(
 class PopoutWindow extends St.Widget {
@@ -31,6 +33,7 @@ class PopoutWindow extends St.Widget {
         this._onMoveCb    = onMove;
         this._onCloseCb   = onClose;
         this._onResizeCb  = onResize;
+        this._signalIds   = [];
 
         this._w = Math.max(MIN_W, width  | 0);
         this._h = Math.max(MIN_H, height | 0);
@@ -81,19 +84,17 @@ class PopoutWindow extends St.Widget {
         });
         this._stack.add_child(this._content);
 
-        this._grip = new St.Widget({
-            style_class: "glance-popout-grip",
-            reactive: true,
-            track_hover: true,
-            x_align: Clutter.ActorAlign.END,
-            y_align: Clutter.ActorAlign.END,
-            width:  GRIP_PX,
-            height: GRIP_PX,
-        });
-        this.add_child(this._grip);
+        // Resize zones. Order matters: BinLayout picks last-added first when
+        // children overlap. The corner sits inside both edges, so it must be
+        // added LAST so it wins in the overlap region.
+        this._edgeR = this._makeResizeZone("glance-popout-edge-r", { dx: 1, dy: 0 },
+            Clutter.ActorAlign.END, Clutter.ActorAlign.FILL, EDGE_PX, 0);
+        this._edgeB = this._makeResizeZone("glance-popout-edge-b", { dx: 0, dy: 1 },
+            Clutter.ActorAlign.FILL, Clutter.ActorAlign.END, 0, EDGE_PX);
+        this._corner = this._makeResizeZone("glance-popout-grip", { dx: 1, dy: 1 },
+            Clutter.ActorAlign.END, Clutter.ActorAlign.END, CORNER_PX, CORNER_PX);
 
-        this._wireDrag();
-        this._wireResize();
+        this._wireMove();
     }
 
     get contentBox() { return this._content; }
@@ -112,85 +113,97 @@ class PopoutWindow extends St.Widget {
     }
 
     sizeTo(w, h) {
-        this._w = Math.max(MIN_W, w | 0);
-        this._h = Math.max(MIN_H, h | 0);
+        const m = Main.layoutManager.primaryMonitor;
+        const maxW = m ? Math.max(MIN_W, m.width  - this._x) : Number.POSITIVE_INFINITY;
+        const maxH = m ? Math.max(MIN_H, m.height - this._y) : Number.POSITIVE_INFINITY;
+        this._w = Math.max(MIN_W, Math.min(maxW, w | 0));
+        this._h = Math.max(MIN_H, Math.min(maxH, h | 0));
         this.set_size(this._w, this._h);
-        this.moveTo(this._x, this._y);
     }
 
     geometry() { return { x: this._x, y: this._y, w: this._w, h: this._h }; }
 
-    _wireDrag() {
-        this._headerHandlers = [];
+    _makeResizeZone(styleClass, axis, xAlign, yAlign, w, h) {
+        const zone = new St.Widget({
+            style_class: styleClass,
+            reactive: true,
+            track_hover: true,
+            x_align: xAlign,
+            y_align: yAlign,
+        });
+        // Explicit size — BinLayout uses each child's preferred size when
+        // alignment is not FILL. width:0 / height:0 means "use FILL on that
+        // axis", so the edge zones span the full popout on one axis.
+        if (w > 0) zone.set_width(w);
+        if (h > 0) zone.set_height(h);
+        this.add_child(zone);
+        this._wireResize(zone, axis);
+        return zone;
+    }
+
+    _wireMove() {
         let dragging = false;
         let startX = 0, startY = 0, origX = 0, origY = 0;
-        const id1 = this._header.connect("button-press-event", (_a, ev) => {
+        this._signalIds.push([this._header, this._header.connect("button-press-event", (_a, ev) => {
             if (ev.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
             dragging = true;
             const [sx, sy] = ev.get_coords();
             startX = sx; startY = sy;
             origX = this._x; origY = this._y;
             return Clutter.EVENT_STOP;
-        });
-        const id2 = this._header.connect("motion-event", (_a, ev) => {
+        })]);
+        this._signalIds.push([this._header, this._header.connect("motion-event", (_a, ev) => {
             if (!dragging) return Clutter.EVENT_PROPAGATE;
             const [sx, sy] = ev.get_coords();
             this.moveTo(origX + (sx - startX), origY + (sy - startY));
             return Clutter.EVENT_STOP;
-        });
-        const id3 = this._header.connect("button-release-event", (_a, ev) => {
+        })]);
+        this._signalIds.push([this._header, this._header.connect("button-release-event", (_a, ev) => {
             if (!dragging) return Clutter.EVENT_PROPAGATE;
             dragging = false;
             if (this._onMoveCb) this._onMoveCb(this._x, this._y);
             return Clutter.EVENT_STOP;
-        });
-        this._headerHandlers.push(id1, id2, id3);
+        })]);
     }
 
-    _wireResize() {
-        this._gripHandlers = [];
+    _wireResize(zone, axis) {
         let resizing = false;
         let startX = 0, startY = 0, origW = 0, origH = 0;
-        const id1 = this._grip.connect("button-press-event", (_a, ev) => {
+        this._signalIds.push([zone, zone.connect("button-press-event", (_a, ev) => {
             if (ev.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
             resizing = true;
             const [sx, sy] = ev.get_coords();
             startX = sx; startY = sy;
             origW = this._w; origH = this._h;
             return Clutter.EVENT_STOP;
-        });
-        const id2 = this._grip.connect("motion-event", (_a, ev) => {
+        })]);
+        this._signalIds.push([zone, zone.connect("motion-event", (_a, ev) => {
             if (!resizing) return Clutter.EVENT_PROPAGATE;
             const [sx, sy] = ev.get_coords();
-            this.sizeTo(origW + (sx - startX), origH + (sy - startY));
+            const dw = axis.dx * (sx - startX);
+            const dh = axis.dy * (sy - startY);
+            this.sizeTo(origW + dw, origH + dh);
             return Clutter.EVENT_STOP;
-        });
-        const id3 = this._grip.connect("button-release-event", (_a, ev) => {
+        })]);
+        this._signalIds.push([zone, zone.connect("button-release-event", (_a, ev) => {
             if (!resizing) return Clutter.EVENT_PROPAGATE;
             resizing = false;
             if (this._onResizeCb) this._onResizeCb(this._w, this._h);
             return Clutter.EVENT_STOP;
-        });
-        this._gripHandlers.push(id1, id2, id3);
+        })]);
     }
 
     destroy() {
-        if (this._headerHandlers) {
-            for (const id of this._headerHandlers) {
-                try { this._header.disconnect(id); } catch (_) {}
-            }
-            this._headerHandlers = null;
+        for (const [obj, id] of this._signalIds) {
+            try { obj.disconnect(id); } catch (_) {}
         }
-        if (this._gripHandlers) {
-            for (const id of this._gripHandlers) {
-                try { this._grip.disconnect(id); } catch (_) {}
-            }
-            this._gripHandlers = null;
-        }
+        this._signalIds = [];
         this._content = null;
         this._header  = null;
-        this._grip    = null;
         this._stack   = null;
+        this._corner  = null;
+        this._edgeR   = null;
+        this._edgeB   = null;
         super.destroy();
     }
 });

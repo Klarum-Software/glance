@@ -249,11 +249,49 @@
 .glance-popout-body {
     padding: 0;
 }
+.glance-custom-kv {
+    spacing: 8px;
+    padding: 2px 6px;
+}
+.glance-custom-key {
+    color: #82868f;
+    font-size: 10px;
+    min-width: 90px;
+}
+.glance-custom-val {
+    color: #e1e3e8;
+    font-size: 11px;
+}
+.glance-custom-list {
+    color: #e1e3e8;
+    font-size: 11px;
+    padding: 2px 6px;
+}
+.glance-custom-raw {
+    color: #82868f;
+    font-size: 10px;
+    font-family: monospace;
+    padding: 4px 6px;
+}
 .glance-popout-grip {
-    background-color: rgba(130, 134, 143, 0.35);
-    border-top-left-radius: 8px;
+    background-color: rgba(130, 134, 143, 0.45);
+    border-top-left-radius: 10px;
     border-bottom-right-radius: 6px;
+    border-top: 1px solid rgba(225, 227, 232, 0.25);
+    border-left: 1px solid rgba(225, 227, 232, 0.25);
 }
 .glance-popout-grip:hover {
-    background-color: rgba(130, 134, 143, 0.65);
+    background-color: rgba(130, 134, 143, 0.85);
+}
+.glance-popout-edge-r {
+    background-color: transparent;
+}
+.glance-popout-edge-r:hover {
+    background-color: rgba(130, 134, 143, 0.45);
+}
+.glance-popout-edge-b {
+    background-color: transparent;
+}
+.glance-popout-edge-b:hover {
+    background-color: rgba(130, 134, 143, 0.45);
 }
