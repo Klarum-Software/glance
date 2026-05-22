@@ -1,11 +1,12 @@
 // Standalone dashboard window. A Main.layoutManager chrome actor that
-// behaves like a small window: drag the header to move, drag the corner /
-// edges to resize. Renders the same dashboard the dropdown does.
+// behaves like a small window: drag the header to move, drag the corner
+// or right/bottom edges to resize.
 //
-// The outer container uses Clutter.BinLayout so the resize zones can
-// overlay the vertical stack of header + body without participating in its
-// flow. Each zone is its own reactive St.Widget child, sized explicitly so
-// BinLayout positions it at the right edge / bottom edge / corner.
+// Children are positioned manually via set_position/set_size in _layout(),
+// called on every sizeTo. Earlier versions used Clutter.BinLayout with
+// x_align/y_align END to anchor the resize handles, which silently failed
+// to position them on some shell builds. Manual positioning is verbose but
+// reliable across versions.
 
 import Clutter from "gi://Clutter";
 import GObject from "gi://GObject";
@@ -13,32 +14,35 @@ import St      from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
-const MIN_W      = 400;
-const MIN_H      = 240;
-const CORNER_PX  = 28;
-const EDGE_PX    = 10;
+const MIN_W     = 400;
+const MIN_H     = 240;
+const CORNER_PX = 28;
+const EDGE_PX   = 10;
 
 export const PopoutWindow = GObject.registerClass(
 class PopoutWindow extends St.Widget {
     _init({ x, y, width, height, onClose, onMove, onResize }) {
         super._init({
-            layout_manager: new Clutter.BinLayout(),
+            layout_manager: new Clutter.FixedLayout(),
             style_class: "glance-popout",
             reactive: true,
             track_hover: true,
-            x_expand: false,
-            y_expand: false,
         });
 
-        this._onMoveCb    = onMove;
-        this._onCloseCb   = onClose;
-        this._onResizeCb  = onResize;
-        this._signalIds   = [];
+        this._onMoveCb   = onMove;
+        this._onCloseCb  = onClose;
+        this._onResizeCb = onResize;
+        this._signalIds  = [];
 
         this._w = Math.max(MIN_W, width  | 0);
         this._h = Math.max(MIN_H, height | 0);
         this._x = x | 0;
         this._y = y | 0;
+
+        // Clamp initial geometry against the primary monitor so a saved size
+        // larger than the current screen doesn't push the resize handles
+        // off-screen on first open.
+        this._clampGeometry();
 
         this.set_size(this._w, this._h);
         this.set_position(this._x, this._y);
@@ -47,8 +51,6 @@ class PopoutWindow extends St.Widget {
             vertical: true,
             x_expand: true,
             y_expand: true,
-            x_align:  Clutter.ActorAlign.FILL,
-            y_align:  Clutter.ActorAlign.FILL,
         });
         this.add_child(this._stack);
 
@@ -84,16 +86,14 @@ class PopoutWindow extends St.Widget {
         });
         this._stack.add_child(this._content);
 
-        // Resize zones. Order matters: BinLayout picks last-added first when
-        // children overlap. The corner sits inside both edges, so it must be
-        // added LAST so it wins in the overlap region.
-        this._edgeR = this._makeResizeZone("glance-popout-edge-r", { dx: 1, dy: 0 },
-            Clutter.ActorAlign.END, Clutter.ActorAlign.FILL, EDGE_PX, 0);
-        this._edgeB = this._makeResizeZone("glance-popout-edge-b", { dx: 0, dy: 1 },
-            Clutter.ActorAlign.FILL, Clutter.ActorAlign.END, 0, EDGE_PX);
-        this._corner = this._makeResizeZone("glance-popout-grip", { dx: 1, dy: 1 },
-            Clutter.ActorAlign.END, Clutter.ActorAlign.END, CORNER_PX, CORNER_PX);
+        // Resize zones. Order matters: later children render on top and
+        // receive picking first. Add edges before corner so the corner wins
+        // in the overlap region.
+        this._edgeR  = this._makeZone("glance-popout-edge-r", { dx: 1, dy: 0 });
+        this._edgeB  = this._makeZone("glance-popout-edge-b", { dx: 0, dy: 1 });
+        this._corner = this._makeZone("glance-popout-grip",   { dx: 1, dy: 1 });
 
+        this._layout();
         this._wireMove();
     }
 
@@ -102,8 +102,6 @@ class PopoutWindow extends St.Widget {
     addGrip() {}
 
     moveTo(x, y) {
-        // Clamp against the primary monitor so a drag past an edge can't strand
-        // the popout off-screen (recoverable only via dconf otherwise).
         const m = Main.layoutManager.primaryMonitor;
         const maxX = m ? Math.max(0, m.width  - this._w) : Number.POSITIVE_INFINITY;
         const maxY = m ? Math.max(0, m.height - this._h) : Number.POSITIVE_INFINITY;
@@ -119,23 +117,41 @@ class PopoutWindow extends St.Widget {
         this._w = Math.max(MIN_W, Math.min(maxW, w | 0));
         this._h = Math.max(MIN_H, Math.min(maxH, h | 0));
         this.set_size(this._w, this._h);
+        this._layout();
     }
 
     geometry() { return { x: this._x, y: this._y, w: this._w, h: this._h }; }
 
-    _makeResizeZone(styleClass, axis, xAlign, yAlign, w, h) {
+    _clampGeometry() {
+        const m = Main.layoutManager.primaryMonitor;
+        if (!m) return;
+        this._w = Math.min(this._w, m.width);
+        this._h = Math.min(this._h, m.height);
+        this._x = Math.max(0, Math.min(m.width  - this._w, this._x));
+        this._y = Math.max(0, Math.min(m.height - this._h, this._y));
+    }
+
+    _layout() {
+        if (!this._stack || !this._corner) return;
+        this._stack.set_position(0, 0);
+        this._stack.set_size(this._w, this._h);
+
+        this._edgeR.set_position(this._w - EDGE_PX, 0);
+        this._edgeR.set_size(EDGE_PX, Math.max(0, this._h - CORNER_PX));
+
+        this._edgeB.set_position(0, this._h - EDGE_PX);
+        this._edgeB.set_size(Math.max(0, this._w - CORNER_PX), EDGE_PX);
+
+        this._corner.set_position(this._w - CORNER_PX, this._h - CORNER_PX);
+        this._corner.set_size(CORNER_PX, CORNER_PX);
+    }
+
+    _makeZone(styleClass, axis) {
         const zone = new St.Widget({
             style_class: styleClass,
             reactive: true,
             track_hover: true,
-            x_align: xAlign,
-            y_align: yAlign,
         });
-        // Explicit size — BinLayout uses each child's preferred size when
-        // alignment is not FILL. width:0 / height:0 means "use FILL on that
-        // axis", so the edge zones span the full popout on one axis.
-        if (w > 0) zone.set_width(w);
-        if (h > 0) zone.set_height(h);
         this.add_child(zone);
         this._wireResize(zone, axis);
         return zone;
