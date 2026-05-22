@@ -57,9 +57,15 @@
 All optional. See [server/config.js](../server/config.js).
 
 `~/.config/glance/config.json` keys: `port`, `host`, `inboxDir`,
-`calendarBin`, `linearSyncUrl`, `services[]`, `presencePort`, `meEmails[]`.
+`calendarBin`, `linearSyncUrl`, `linearApiKey`, `services[]`,
+`presencePort`, `meEmails[]`.
 
 Each is also overridable via `GLANCE_*` env vars.
+
+For the Google Calendar integration (`calendarBin` pointing at
+`server/bin/gcal.js`), see [CALENDAR-SETUP.md](CALENDAR-SETUP.md). Each
+user creates their own Google Cloud OAuth client so the repo carries no
+shared credentials.
 
 ## Extension structure
 

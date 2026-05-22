@@ -68,7 +68,7 @@ Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
 | REMOTE   | `tailscale status --json` + `klarum-presence` agent on each peer (port 5176) |
 | SESSIONS | `ps`-derived `claude` process trees + RSS vs total RAM |
 | LINEAR   | `<inboxDir>/.linear-cache/*.json`         |
-| CALENDAR | `calendarBin` stdout (refreshed every 60s)|
+| CALENDAR | `calendarBin` stdout (refreshed every 60s). For Google Calendar, see [docs/CALENDAR-SETUP.md](docs/CALENDAR-SETUP.md) |
 
 ## Architecture
 
