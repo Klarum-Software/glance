@@ -161,7 +161,7 @@ function renderLinear(state, opts) {
         return { meta: `· ${lin.total || 0} open · ${lin.overdue || 0} overdue`, children };
     }
     for (const i of lin.items) {
-        const row = new St.BoxLayout({ vertical: false, style_class: "glance-li", x_expand: true });
+        const row = new St.BoxLayout({ vertical: false, style_class: "glance-li", x_expand: true, x_align: Clutter.ActorAlign.FILL });
         row.add_child(new St.Label({ text: i.identifier, style_class: "glance-li-id", y_align: Clutter.ActorAlign.CENTER }));
         const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
         const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";

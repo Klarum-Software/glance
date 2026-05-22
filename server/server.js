@@ -15,6 +15,7 @@
 // Zero npm deps. Cross-platform via server/platform/{linux,macos,windows}.js.
 
 const http        = require("http");
+const https       = require("https");
 const fs          = require("fs");
 const path        = require("path");
 const { spawn }   = require("child_process");
@@ -390,7 +391,87 @@ async function actionRefresh() {
   return gatherState();
 }
 
+function syncLinearBuiltIn() {
+  return new Promise((resolve) => {
+    const query = JSON.stringify({
+      query: `{
+        issues(
+          filter: {
+            assignee: { isMe: { eq: true } }
+            state: { type: { nin: ["completed", "cancelled"] } }
+          }
+          first: 100
+        ) {
+          nodes {
+            id identifier title priority priorityLabel url dueDate
+            state { name type color }
+            project { name color }
+            assignee { email }
+          }
+        }
+      }`,
+    });
+
+    const opts = {
+      hostname: "api.linear.app",
+      path: "/graphql",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(query),
+        "authorization": cfg.linearApiKey,
+      },
+      timeout: 15000,
+    };
+
+    const req = https.request(opts, (r) => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+        catch (e) { return resolve({ ok: false, error: "bad JSON: " + e.message }); }
+
+        if (body.errors) return resolve({ ok: false, error: body.errors[0]?.message || "GraphQL error" });
+
+        const issues = body.data?.issues?.nodes || [];
+        const dir = path.join(cfg.inboxDir, ".linear-cache");
+        try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+
+        // Remove stale issue files (leave cycles.json / milestones.json alone)
+        const incoming = new Set(issues.map(i => i.identifier + ".json"));
+        try {
+          for (const f of fs.readdirSync(dir)) {
+            if (f === "cycles.json" || f === "milestones.json") continue;
+            if (f.endsWith(".json") && !incoming.has(f)) {
+              try { fs.unlinkSync(path.join(dir, f)); } catch {}
+            }
+          }
+        } catch {}
+
+        for (const issue of issues) {
+          try {
+            fs.writeFileSync(
+              path.join(dir, issue.identifier + ".json"),
+              JSON.stringify(issue, null, 2) + "\n",
+              { mode: 0o600 }
+            );
+          } catch {}
+        }
+
+        resolve({ ok: true, synced: issues.length });
+      });
+    });
+
+    req.on("error", e => resolve({ ok: false, error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+    req.write(query);
+    req.end();
+  });
+}
+
 function actionSyncLinear() {
+  if (cfg.linearApiKey) return syncLinearBuiltIn();
   return new Promise((resolve) => {
     if (!cfg.linearSyncUrl) return resolve({ ok: false, error: "linearSyncUrl not configured" });
     let url;
