@@ -250,6 +250,10 @@
     padding: 0;
 }
 .glance-popout-grip {
-    background-color: #262a31;
-    border-top-left-radius: 4px;
+    background-color: rgba(130, 134, 143, 0.35);
+    border-top-left-radius: 8px;
+    border-bottom-right-radius: 6px;
+}
+.glance-popout-grip:hover {
+    background-color: rgba(130, 134, 143, 0.65);
 }

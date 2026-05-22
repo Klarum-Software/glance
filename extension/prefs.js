@@ -5,7 +5,7 @@ import Gtk from "gi://Gtk";
 import Gio from "gi://Gio";
 import GObject from "gi://GObject";
 
-import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/prefs.js";
+import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
 // Keep widget metadata in lockstep with extension/lib/widgets.js. Prefs.js
 // runs in a separate GTK process, so it can't import the St-based registry —

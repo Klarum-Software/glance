@@ -675,6 +675,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`glance: port ${cfg.port} already in use on ${cfg.host} (another glance backend running?)`);
+    process.exit(2);
+  }
+  console.error(`glance: server error: ${err.code || ""} ${err.message}`);
+  process.exit(1);
+});
+
 server.listen(cfg.port, cfg.host, () => {
   console.log(`glance ${PKG.version} (${platform.platformLabel})  http://${cfg.host}:${cfg.port}/`);
 });

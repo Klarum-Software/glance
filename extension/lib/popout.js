@@ -1,11 +1,10 @@
 // Standalone dashboard window. Implemented as a Main.layoutManager chrome
-// actor with a draggable header. Renders the same dashboard the dropdown
-// does, driven by the same state polling.
+// actor with a draggable header and a corner resize grip. Renders the same
+// dashboard the dropdown does, driven by the same state polling.
 //
-// Resizing happens via the gschema keys popout-width / popout-height,
-// editable from Extension prefs ("Pop-out" page). A drag handle inside an
-// St.BoxLayout fights the box's layout manager; resizing via setting keeps
-// the popout robust across shell versions.
+// The outer container uses Clutter.BinLayout so the resize grip can overlay
+// the bottom-right corner without participating in the vertical box flow
+// of header + body.
 
 import Clutter from "gi://Clutter";
 import GObject from "gi://GObject";
@@ -13,14 +12,15 @@ import St      from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
-const MIN_W = 400;
-const MIN_H = 240;
+const MIN_W    = 400;
+const MIN_H    = 240;
+const GRIP_PX  = 18;
 
 export const PopoutWindow = GObject.registerClass(
-class PopoutWindow extends St.BoxLayout {
-    _init({ x, y, width, height, onClose, onMove }) {
+class PopoutWindow extends St.Widget {
+    _init({ x, y, width, height, onClose, onMove, onResize }) {
         super._init({
-            vertical: true,
+            layout_manager: new Clutter.BinLayout(),
             style_class: "glance-popout",
             reactive: true,
             track_hover: true,
@@ -28,8 +28,9 @@ class PopoutWindow extends St.BoxLayout {
             y_expand: false,
         });
 
-        this._onMoveCb   = onMove;
-        this._onCloseCb  = onClose;
+        this._onMoveCb    = onMove;
+        this._onCloseCb   = onClose;
+        this._onResizeCb  = onResize;
 
         this._w = Math.max(MIN_W, width  | 0);
         this._h = Math.max(MIN_H, height | 0);
@@ -38,6 +39,15 @@ class PopoutWindow extends St.BoxLayout {
 
         this.set_size(this._w, this._h);
         this.set_position(this._x, this._y);
+
+        this._stack = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            y_expand: true,
+            x_align:  Clutter.ActorAlign.FILL,
+            y_align:  Clutter.ActorAlign.FILL,
+        });
+        this.add_child(this._stack);
 
         this._header = new St.BoxLayout({
             vertical: false,
@@ -61,7 +71,7 @@ class PopoutWindow extends St.BoxLayout {
         });
         close.connect("clicked", () => this._onCloseCb && this._onCloseCb());
         this._header.add_child(close);
-        this.add_child(this._header);
+        this._stack.add_child(this._header);
 
         this._content = new St.BoxLayout({
             vertical: true,
@@ -69,15 +79,25 @@ class PopoutWindow extends St.BoxLayout {
             x_expand: true,
             y_expand: true,
         });
-        this.add_child(this._content);
+        this._stack.add_child(this._content);
+
+        this._grip = new St.Widget({
+            style_class: "glance-popout-grip",
+            reactive: true,
+            track_hover: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.END,
+            width:  GRIP_PX,
+            height: GRIP_PX,
+        });
+        this.add_child(this._grip);
 
         this._wireDrag();
+        this._wireResize();
     }
 
     get contentBox() { return this._content; }
 
-    // addGrip kept as a no-op so callers don't break across versions. If we
-    // ever wire a true resize grip we'll reinstate the implementation here.
     addGrip() {}
 
     moveTo(x, y) {
@@ -95,8 +115,6 @@ class PopoutWindow extends St.BoxLayout {
         this._w = Math.max(MIN_W, w | 0);
         this._h = Math.max(MIN_H, h | 0);
         this.set_size(this._w, this._h);
-        // A resize may push the bottom-right past the monitor edge — reapply
-        // the move clamp so we don't end up partially off-screen.
         this.moveTo(this._x, this._y);
     }
 
@@ -129,6 +147,33 @@ class PopoutWindow extends St.BoxLayout {
         this._headerHandlers.push(id1, id2, id3);
     }
 
+    _wireResize() {
+        this._gripHandlers = [];
+        let resizing = false;
+        let startX = 0, startY = 0, origW = 0, origH = 0;
+        const id1 = this._grip.connect("button-press-event", (_a, ev) => {
+            if (ev.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+            resizing = true;
+            const [sx, sy] = ev.get_coords();
+            startX = sx; startY = sy;
+            origW = this._w; origH = this._h;
+            return Clutter.EVENT_STOP;
+        });
+        const id2 = this._grip.connect("motion-event", (_a, ev) => {
+            if (!resizing) return Clutter.EVENT_PROPAGATE;
+            const [sx, sy] = ev.get_coords();
+            this.sizeTo(origW + (sx - startX), origH + (sy - startY));
+            return Clutter.EVENT_STOP;
+        });
+        const id3 = this._grip.connect("button-release-event", (_a, ev) => {
+            if (!resizing) return Clutter.EVENT_PROPAGATE;
+            resizing = false;
+            if (this._onResizeCb) this._onResizeCb(this._w, this._h);
+            return Clutter.EVENT_STOP;
+        });
+        this._gripHandlers.push(id1, id2, id3);
+    }
+
     destroy() {
         if (this._headerHandlers) {
             for (const id of this._headerHandlers) {
@@ -136,8 +181,16 @@ class PopoutWindow extends St.BoxLayout {
             }
             this._headerHandlers = null;
         }
+        if (this._gripHandlers) {
+            for (const id of this._gripHandlers) {
+                try { this._grip.disconnect(id); } catch (_) {}
+            }
+            this._gripHandlers = null;
+        }
         this._content = null;
         this._header  = null;
+        this._grip    = null;
+        this._stack   = null;
         super.destroy();
     }
 });

@@ -221,11 +221,11 @@ class GlanceIndicator extends PanelMenu.Button {
         const h = this._settings.get_int("popout-height");
         this._popout = new PopoutWindow({
             x, y, width: w, height: h,
-            onClose: () => this._closePopout(),
-            onMove:  (nx, ny) => { this._settings.set_int("popout-x", nx); this._settings.set_int("popout-y", ny); },
+            onClose:  () => this._closePopout(),
+            onMove:   (nx, ny) => { this._settings.set_int("popout-x", nx); this._settings.set_int("popout-y", ny); },
+            onResize: (nw, nh) => { this._settings.set_int("popout-width", nw); this._settings.set_int("popout-height", nh); },
         });
         addPopoutToShell(this._popout);
-        this._popout.addGrip();
         this._settings.set_boolean("popout-active", true);
         if (this._state) this._rerender();
     }

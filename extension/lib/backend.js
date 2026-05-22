@@ -4,6 +4,8 @@
 import GLib from "gi://GLib";
 import Gio  from "gi://Gio";
 
+import { waitForHealth } from "./api.js";
+
 export class Backend {
   constructor({ nodePath, serverPath, port, host = "127.0.0.1" }) {
     this._node       = nodePath;
@@ -12,14 +14,26 @@ export class Backend {
     this._host       = host;
     this._proc       = null;
     this._started    = false;
+    this._adopted    = false;
     this._killTimer  = 0;
   }
 
   get url()  { return `http://${this._host}:${this._port}`; }
-  get isRunning() { return this._started && this._proc !== null; }
+  get isRunning() { return this._started && (this._proc !== null || this._adopted); }
 
-  start(onExit) {
-    if (this._proc) return;
+  // Adopt an already-running backend on this port if one responds, otherwise
+  // spawn. Without the probe, a stale instance (orphan from a previous
+  // enable/disable, dev shell, manual launch) makes listen() emit EADDRINUSE
+  // and the new child exits with an unhandled error event.
+  async start(onExit) {
+    if (this._proc || this._adopted) return;
+    const alreadyUp = await waitForHealth(this.url, 600, 200, null);
+    if (alreadyUp) {
+      this._adopted = true;
+      this._started = true;
+      log(`[glance] backend already responding at ${this.url}; adopting`);
+      return;
+    }
     const launcher = new Gio.SubprocessLauncher({
       flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE,
     });
@@ -80,6 +94,12 @@ export class Backend {
   }
 
   stop() {
+    if (this._adopted) {
+      // We didn't spawn this one, so we don't kill it. Just release our claim.
+      this._adopted = false;
+      this._started = false;
+      return;
+    }
     if (!this._proc) return;
     try { this._proc.send_signal(15); } catch (_) {}
     this._killTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
