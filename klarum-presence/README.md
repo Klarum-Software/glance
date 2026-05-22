@@ -59,24 +59,25 @@ isn't available on this platform.
 ## Running
 
 ```bash
-# foreground (development) — binds 127.0.0.1:5176 by default
+# foreground (development) — binds the tailnet IP if `tailscale ip -4`
+# returns one, else 127.0.0.1
 node bin/klarum-presence
 
 # or with the npm scripts
 npm start
 
-# expose on the tailnet (do this only once tailscale is verified up)
+# force loopback even when tailscale is up
+KLARUM_PRESENCE_HOST=127.0.0.1 npm start
+# expose on every interface (LAN included — only do this knowingly)
 KLARUM_PRESENCE_HOST=0.0.0.0 npm start
-# or, safer, bind only the tailnet interface
-KLARUM_PRESENCE_HOST="$(tailscale ip -4)" npm start
 ```
 
-The agent defaults to **loopback** so a fresh install on a host without
-tailscale (or with a misconfigured tailnet) doesn't expose the snapshot
-(active tmux session, cwd, git branch, agent list, load) to anything LAN
-reachable. The viewer side of glance still works against `127.0.0.1` on
-the same machine; flip to `0.0.0.0` or a tailscale IP to enable peer
-fetches.
+The agent prefers the **tailnet interface** when one is available, so a
+fresh install on a tailscale host is reachable from peers without manual
+config. On a host without tailscale (or before tailscaled starts) it
+stays on loopback — the snapshot (active tmux session, cwd, git branch,
+agent list, load) is never bound to a non-tailnet interface unless you
+explicitly set `KLARUM_PRESENCE_HOST=0.0.0.0`.
 
 Verify:
 
