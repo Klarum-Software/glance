@@ -15,6 +15,8 @@ const DEFAULTS = {
   calendarBin: null,
   // optional: inbox-ui /api/linear/sync endpoint
   linearSyncUrl: null,
+  // optional: Linear API key for built-in sync (alternative to linearSyncUrl)
+  linearApiKey: null,
   // services to ping in the topbar (linux: systemd unit names; macos: launchd labels; win: service names)
   services: ["glance"],
   // tailnet peer presence — turn on if you've installed klarum-presence on peers
@@ -37,7 +39,8 @@ function load() {
   if (process.env.GLANCE_HOST)         env.host = process.env.GLANCE_HOST;
   if (process.env.GLANCE_INBOX)        env.inboxDir = process.env.GLANCE_INBOX;
   if (process.env.GLANCE_CALENDAR_BIN) env.calendarBin = process.env.GLANCE_CALENDAR_BIN;
-  if (process.env.GLANCE_LINEAR_SYNC)  env.linearSyncUrl = process.env.GLANCE_LINEAR_SYNC;
+  if (process.env.GLANCE_LINEAR_SYNC)     env.linearSyncUrl = process.env.GLANCE_LINEAR_SYNC;
+  if (process.env.GLANCE_LINEAR_API_KEY) env.linearApiKey  = process.env.GLANCE_LINEAR_API_KEY;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);
   if (process.env.GLANCE_PRESENCE_PORT) env.presencePort = Number(process.env.GLANCE_PRESENCE_PORT);
   if (process.env.GLANCE_ME_EMAILS)    env.meEmails = process.env.GLANCE_ME_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
