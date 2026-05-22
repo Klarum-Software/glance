@@ -69,6 +69,18 @@
     font-feature-settings: "tnum";
     padding-left: 8px;
 }
+.glance-tools { spacing: 4px; padding-left: 12px; }
+.glance-tool-btn {
+    background-color: #1c1f25;
+    border: 1px solid #262a31;
+    border-radius: 3px;
+    color: #e1e3e8;
+    font-size: 11px;
+    padding: 2px 8px;
+    min-width: 22px;
+}
+.glance-tool-btn:hover { background-color: #262a31; }
+
 .glance-services { spacing: 10px; }
 .glance-svc {
     spacing: 4px;
@@ -100,6 +112,12 @@
     min-width: 180px;
 }
 .glance-col-head { spacing: 6px; padding-bottom: 4px; }
+.glance-col.edit {
+    border: 1px dashed #4ec9b0;
+    border-radius: 4px;
+}
+.glance-col-ctrl { spacing: 2px; }
+.glance-col-ctrl .glance-tool-btn { padding: 0 6px; min-width: 18px; font-size: 10px; }
 .glance-col-tag {
     font-size: 11px;
     font-weight: bold;
@@ -151,7 +169,12 @@
 .glance-peer.offline .glance-peer-name { color: #82868f; }
 .glance-peer-os  { color: #82868f; font-size: 10px; }
 .glance-peer-ip  { color: #82868f; font-size: 10px; }
-.glance-peer-note { color: #82868f; font-size: 11px; font-style: italic; padding-left: 14px; }
+.glance-peer-note   { color: #82868f; font-size: 11px; font-style: italic; padding-left: 14px; }
+.glance-peer-spark  { color: #4ec9b0; font-size: 11px; padding-left: 14px; font-feature-settings: "tnum"; }
+.glance-peer-tmux   { color: #e1e3e8; font-size: 11px; padding-left: 14px; }
+.glance-peer-agents { color: #ff8a65; font-size: 11px; padding-left: 14px; }
+.glance-peer-git    { color: #f2c94c; font-size: 11px; padding-left: 14px; }
+.glance-peer-idle   { color: #82868f; font-size: 10px; padding-left: 14px; }
 
 /* ── sessions ───────────────────────────────────────────────────────── */
 
@@ -172,16 +195,16 @@
 /* ── linear ─────────────────────────────────────────────────────────── */
 
 .glance-li { spacing: 6px; padding: 2px 6px; }
-.glance-li-id    { color: #e1e3e8; font-size: 11px; min-width: 64px; }
-.glance-li-prio  { font-size: 10px; font-weight: bold; min-width: 18px; }
+.glance-li-id    { color: #e1e3e8; font-size: 11px; min-width: 56px; }
+.glance-li-prio  { font-size: 10px; font-weight: bold; min-width: 16px; }
 .glance-li-prio.p1 { color: #ff5f56; }
 .glance-li-prio.p2 { color: #f2c94c; }
 .glance-li-prio.p3 { color: #82868f; }
 .glance-li-prio.p4 { color: #82868f; }
-.glance-li-state { color: #82868f; font-size: 10px; min-width: 72px; }
-.glance-li-due   { color: #82868f; font-size: 10px; min-width: 44px; font-feature-settings: "tnum"; }
+.glance-li-state { color: #82868f; font-size: 10px; min-width: 64px; }
+.glance-li-due   { color: #82868f; font-size: 10px; min-width: 40px; font-feature-settings: "tnum"; }
 .glance-li-due.overdue { color: #ff5f56; font-weight: bold; }
-.glance-li-title { color: #e1e3e8; font-size: 11px; }
+.glance-li-title { color: #e1e3e8; font-size: 11px; max-width: 320px; }
 
 /* ── calendar ───────────────────────────────────────────────────────── */
 
@@ -193,3 +216,40 @@
 .glance-cal-event { spacing: 8px; padding: 2px 6px; }
 .glance-cal-time   { color: #e1e3e8; font-size: 11px; min-width: 40px; font-feature-settings: "tnum"; }
 .glance-cal-summary { color: #e1e3e8; font-size: 11px; }
+
+/* ── pop-out window ─────────────────────────────────────────────────── */
+
+.glance-popout {
+    background-color: #0d0f12;
+    border: 1px solid #262a31;
+    border-radius: 6px;
+    color: #e1e3e8;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.glance-popout-head {
+    background-color: #15181d;
+    border-bottom: 1px solid #262a31;
+    padding: 6px 12px;
+    spacing: 8px;
+    min-height: 24px;
+}
+.glance-popout-title {
+    color: #e1e3e8;
+    font-weight: bold;
+    font-size: 12px;
+}
+.glance-popout-close {
+    background-color: transparent;
+    color: #82868f;
+    font-size: 12px;
+    border: none;
+    padding: 0 6px;
+}
+.glance-popout-close:hover { color: #ff5f56; }
+.glance-popout-body {
+    padding: 0;
+}
+.glance-popout-grip {
+    background-color: #262a31;
+    border-top-left-radius: 4px;
+}

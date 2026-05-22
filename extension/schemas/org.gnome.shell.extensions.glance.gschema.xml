@@ -22,9 +22,44 @@
       <description>How often the dashboard polls /api/state. Minimum 5.</description>
     </key>
     <key name="dropdown-width-pct" type="i">
-      <default>90</default>
+      <default>65</default>
       <summary>Dropdown width (% of monitor)</summary>
-      <description>Width of the dashboard dropdown as a percentage of the monitor width. 30–100.</description>
+      <description>Width of the dashboard dropdown as a percentage of the monitor width. 30-100.</description>
+    </key>
+    <key name="widget-layout" type="s">
+      <default>'[{"id":"remote","enabled":true,"weight":1},{"id":"sessions","enabled":true,"weight":1},{"id":"linear","enabled":true,"weight":2},{"id":"calendar","enabled":true,"weight":1}]'</default>
+      <summary>Widget layout (JSON)</summary>
+      <description>Ordered list of dashboard widgets. Each entry: { id, enabled, weight }. Unknown ids are dropped on load; newly registered widgets are appended disabled. Edit via the extension prefs or in-dashboard edit mode.</description>
+    </key>
+    <key name="edit-mode" type="b">
+      <default>false</default>
+      <summary>Edit mode</summary>
+      <description>When true the dashboard shows per-widget controls (move, resize, hide). Persisted across openings.</description>
+    </key>
+    <key name="popout-active" type="b">
+      <default>false</default>
+      <summary>Pop-out window active</summary>
+      <description>Whether the standalone dashboard window is currently shown. Re-enabled across login if true.</description>
+    </key>
+    <key name="popout-x" type="i">
+      <default>120</default>
+      <summary>Pop-out window x</summary>
+      <description>Last x position of the standalone dashboard window, in stage coordinates.</description>
+    </key>
+    <key name="popout-y" type="i">
+      <default>80</default>
+      <summary>Pop-out window y</summary>
+      <description>Last y position of the standalone dashboard window, in stage coordinates.</description>
+    </key>
+    <key name="popout-width" type="i">
+      <default>1100</default>
+      <summary>Pop-out window width</summary>
+      <description>Last width of the standalone dashboard window in pixels. Minimum 400.</description>
+    </key>
+    <key name="popout-height" type="i">
+      <default>700</default>
+      <summary>Pop-out window height</summary>
+      <description>Last height of the standalone dashboard window in pixels. Minimum 240.</description>
     </key>
   </schema>
 </schemalist>

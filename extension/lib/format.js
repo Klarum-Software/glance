@@ -38,3 +38,13 @@ export function tomorrow() {
   const d = new Date(); d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
 }
+
+// Shorten an absolute path for one-line rendering. Replaces $HOME with ~ and
+// keeps at most the last two path segments.
+export function shortPath(p) {
+  if (!p || typeof p !== "string") return "";
+  const segs = p.split("/").filter(Boolean);
+  if (!segs.length) return p;
+  const tail = segs.slice(-2).join("/");
+  return tail;
+}

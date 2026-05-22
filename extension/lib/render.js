@@ -1,15 +1,18 @@
-// Render the dashboard state into a parent St.BoxLayout (vertical).
-// Layout: [ topbar ]  [ 4-column body ]
+// Dashboard renderer. The orchestrator: paints the topbar, then iterates the
+// configured widget layout and asks each widget to produce its column body.
+// Widget renderers themselves live in widgets.js.
 
 import Clutter from "gi://Clutter";
 import St      from "gi://St";
 
-import * as fmt from "./format.js";
+import * as fmt   from "./format.js";
+import { getWidget, parseLayout, serializeLayout } from "./widgets.js";
 
 export function renderDashboard(parent, state, opts = {}) {
     parent.destroy_all_children();
 
-    parent.add_child(makeTopbar(state));
+    const layout = parseLayout(opts.layoutJson);
+    parent.add_child(makeTopbar(state, opts));
 
     const body = new St.BoxLayout({
         vertical: false,
@@ -18,17 +21,42 @@ export function renderDashboard(parent, state, opts = {}) {
         y_expand: true,
     });
 
-    body.add_child(makeColumn("REMOTE",   "remote",   renderRemote(state.remote)));
-    body.add_child(makeColumn("SESSIONS", "sessions", renderSessions(state)));
-    body.add_child(makeColumn("LINEAR",   "linear",   renderLinear(state.linear || { items: [] }, opts)));
-    body.add_child(makeColumn("CALENDAR", "calendar", renderCalendar(state.calendar || { events: [] })));
+    const visible = layout.filter(e => e.enabled);
+    if (!visible.length) {
+        body.add_child(new St.Label({
+            text: opts.editMode
+                ? "no widgets enabled — use the prefs or the + menu to add some"
+                : "no widgets enabled",
+            style_class: "glance-empty",
+            x_expand: true,
+        }));
+    } else {
+        const movableIds = visible.map(e => e.id);
+        visible.forEach((entry, idx) => {
+            const w = getWidget(entry.id);
+            if (!w) return;
+            const content = w.render(state, opts);
+            const col = makeColumn({
+                widget:   w,
+                entry,
+                content,
+                editMode: !!opts.editMode,
+                isFirst:  idx === 0,
+                isLast:   idx === visible.length - 1,
+                onMove:   opts.onMoveWidget,
+                onResize: opts.onResizeWidget,
+                onHide:   opts.onHideWidget,
+            });
+            body.add_child(col);
+        });
+    }
 
     parent.add_child(body);
 }
 
 // ── topbar ──────────────────────────────────────────────────────────────
 
-function makeTopbar(state) {
+function makeTopbar(state, opts) {
     const bar = new St.BoxLayout({
         vertical: false,
         style_class: "glance-topbar",
@@ -54,22 +82,60 @@ function makeTopbar(state) {
     }
     bar.add_child(svcs);
 
+    const tools = new St.BoxLayout({ vertical: false, style_class: "glance-tools" });
+    tools.add_child(makeIconButton(opts.editMode ? "✓" : "⚙",
+        opts.editMode ? "exit edit mode" : "edit layout",
+        () => opts.onToggleEdit && opts.onToggleEdit()));
+    if (opts.onPopOut) {
+        tools.add_child(makeIconButton("⇱", "open in standalone window", () => opts.onPopOut()));
+    }
+    if (opts.onClosePopOut) {
+        tools.add_child(makeIconButton("✕", "close standalone window", () => opts.onClosePopOut()));
+    }
+    bar.add_child(tools);
+
     return bar;
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────
+function makeIconButton(label, tooltip, onClick) {
+    const btn = new St.Button({
+        label,
+        style_class: "glance-tool-btn",
+        can_focus: true,
+    });
+    if (tooltip) btn.set_accessible_name(tooltip);
+    btn.connect("clicked", () => onClick && onClick());
+    return btn;
+}
 
-function makeColumn(label, tagClass, content) {
+// ── column ──────────────────────────────────────────────────────────────
+
+function makeColumn({ widget, entry, content, editMode, isFirst, isLast, onMove, onResize, onHide }) {
     const col = new St.BoxLayout({
         vertical: true,
-        style_class: "glance-col",
+        style_class: "glance-col" + (editMode ? " edit" : ""),
         x_expand: true,
         y_expand: true,
     });
+    // We use min-width to encode the weight in CSS-friendly units. Higher
+    // weights claim more space inside the flex row.
+    const baseMin = 180;
+    col.set_style(`min-width: ${baseMin * (entry.weight || 1)}px;`);
 
     const head = new St.BoxLayout({ vertical: false, style_class: "glance-col-head" });
-    head.add_child(new St.Label({ text: label, style_class: `glance-col-tag tag-${tagClass}` }));
+    head.add_child(new St.Label({ text: widget.title, style_class: `glance-col-tag tag-${widget.tagClass}` }));
     if (content.meta) head.add_child(new St.Label({ text: " " + content.meta, style_class: "glance-col-meta" }));
+    head.add_child(new St.Widget({ x_expand: true }));
+
+    if (editMode) {
+        const ctrl = new St.BoxLayout({ vertical: false, style_class: "glance-col-ctrl" });
+        ctrl.add_child(makeIconButton("◀",  "move left",  () => !isFirst && onMove && onMove(entry.id, -1)));
+        ctrl.add_child(makeIconButton("▶",  "move right", () => !isLast  && onMove && onMove(entry.id, +1)));
+        ctrl.add_child(makeIconButton("−",  "shrink",     () => onResize && onResize(entry.id, -1)));
+        ctrl.add_child(makeIconButton("+",  "grow",       () => onResize && onResize(entry.id, +1)));
+        ctrl.add_child(makeIconButton("✕",  "hide widget", () => onHide   && onHide(entry.id)));
+        head.add_child(ctrl);
+    }
     col.add_child(head);
 
     const scroll = new St.ScrollView({
@@ -81,151 +147,42 @@ function makeColumn(label, tagClass, content) {
     });
     const inner = new St.BoxLayout({ vertical: true, style_class: "glance-col-body", x_expand: true });
     for (const child of content.children) inner.add_child(child);
-    scroll.set_child(inner);
+    if (scroll.set_child) scroll.set_child(inner);
+    else scroll.add_actor(inner);
     col.add_child(scroll);
 
     return col;
 }
 
-function emptyRow(text) {
-    return new St.Label({ text, style_class: "glance-empty", x_expand: true });
+// ── layout mutation helpers ─────────────────────────────────────────────
+// Pure functions over the layout array — extension.js calls these in
+// response to edit-mode button clicks, then persists the result.
+
+export function moveWidget(layout, id, direction) {
+    const out = parseLayout(serializeLayout(layout));
+    const enabledIds = out.filter(e => e.enabled).map(e => e.id);
+    const idx = enabledIds.indexOf(id);
+    const target = idx + direction;
+    if (idx < 0 || target < 0 || target >= enabledIds.length) return out;
+    const otherId = enabledIds[target];
+
+    const a = out.findIndex(e => e.id === id);
+    const b = out.findIndex(e => e.id === otherId);
+    const swap = out[a]; out[a] = out[b]; out[b] = swap;
+    return out;
 }
 
-function clickableRow(child, onClick) {
-    if (!onClick) return child;
-    const btn = new St.Button({
-        style_class: "glance-row-btn",
-        child,
-        x_expand: true,
-        can_focus: true,
-    });
-    btn.connect("clicked", () => onClick());
-    return btn;
+export function resizeWidget(layout, id, delta) {
+    const out = parseLayout(serializeLayout(layout));
+    const e = out.find(x => x.id === id);
+    if (!e) return out;
+    e.weight = Math.max(1, Math.min(8, (e.weight || 1) + delta));
+    return out;
 }
 
-// ── REMOTE ──────────────────────────────────────────────────────────────
-
-function renderRemote(remote) {
-    const children = [];
-    if (!remote || !remote.peers || !remote.peers.length) {
-        children.push(emptyRow("no peers"));
-        return { meta: "· no peers", children };
-    }
-    const online = remote.peers.filter(p => p.online).length;
-    for (const p of remote.peers) {
-        const row = new St.BoxLayout({ vertical: true, style_class: "glance-peer" + (p.is_self ? " self" : (p.online ? "" : " offline")) });
-        const head = new St.BoxLayout({ vertical: false, style_class: "glance-peer-head" });
-        head.add_child(new St.Widget({ style_class: "glance-peer-dot " + (p.online ? "online" : "offline"), y_align: Clutter.ActorAlign.CENTER }));
-        head.add_child(new St.Label({ text: p.hostname + (p.is_self ? " (this)" : ""), style_class: "glance-peer-name", y_align: Clutter.ActorAlign.CENTER }));
-        if (p.os)  head.add_child(new St.Label({ text: " " + p.os, style_class: "glance-peer-os", y_align: Clutter.ActorAlign.CENTER }));
-        head.add_child(new St.Widget({ x_expand: true }));
-        if (p.ip)  head.add_child(new St.Label({ text: p.ip, style_class: "glance-peer-ip", y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(head);
-        if (!p.online) {
-            row.add_child(new St.Label({ text: "offline · last seen " + fmt.fmtAgo(p.last_seen), style_class: "glance-peer-note" }));
-        } else if (!p.snapshot) {
-            row.add_child(new St.Label({ text: p.fetch_error ? `presence: ${p.fetch_error}` : "no presence agent", style_class: "glance-peer-note" }));
-        } else {
-            const s = p.snapshot;
-            const stats = `up ${fmt.fmtUptime(s.uptime_s)} · load ${s.load_1m?.toFixed?.(2) ?? "—"} · mem ${s.mem_pct ?? "—"}% · claude ${s.claude_procs || 0}`;
-            row.add_child(new St.Label({ text: stats, style_class: "glance-peer-note" }));
-        }
-        children.push(row);
-    }
-    return { meta: `· ${online}/${remote.peers.length} online`, children };
-}
-
-// ── SESSIONS ────────────────────────────────────────────────────────────
-
-function renderSessions(state) {
-    const children = [];
-    const mem      = state.memory || { total_kb: 1, available_kb: 0, used_kb: 0 };
-    const sessions = state.sessions || [];
-    const meta = `· ${fmt.fmtBytes(mem.used_kb)} / ${fmt.fmtBytes(mem.total_kb)} · ${sessions.length} sess`;
-
-    if (!sessions.length) {
-        children.push(emptyRow("no claude sessions"));
-        return { meta, children };
-    }
-    for (const s of sessions) {
-        const row = new St.BoxLayout({ vertical: true, style_class: "glance-session" + (s.worktree ? " worktree" : "") });
-        const head = new St.BoxLayout({ vertical: false, style_class: "glance-session-head" });
-        const label = s.cwd_short
-            ? (s.project ? `${s.project}  ${s.cwd_short.split("/").slice(-1)[0]}` : s.cwd_short)
-            : `pid ${s.pid}`;
-        head.add_child(new St.Label({ text: label, style_class: "glance-session-cwd", y_align: Clutter.ActorAlign.CENTER, x_expand: true }));
-        head.add_child(new St.Label({ text: fmt.fmtBytes(s.rss_kb), style_class: "glance-session-rss", y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(head);
-        const tags = [];
-        if (s.worktree)  tags.push("⌥ worktree");
-        if (s.subagents) tags.push(`${s.subagents} sub`);
-        tags.push(`pid ${s.pid}`);
-        row.add_child(new St.Label({ text: tags.join(" · "), style_class: "glance-session-meta" }));
-        children.push(row);
-    }
-    return { meta, children };
-}
-
-// ── LINEAR ──────────────────────────────────────────────────────────────
-
-function renderLinear(lin, opts) {
-    const children = [];
-    if (!lin.items || !lin.items.length) {
-        children.push(emptyRow("nothing assigned"));
-        return { meta: `· ${lin.total || 0} open · ${lin.overdue || 0} overdue`, children };
-    }
-    for (const i of lin.items) {
-        const row = new St.BoxLayout({ vertical: false, style_class: "glance-li" });
-        row.add_child(new St.Label({ text: i.identifier, style_class: "glance-li-id", y_align: Clutter.ActorAlign.CENTER }));
-        const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
-        const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";
-        row.add_child(new St.Label({ text: pLabel, style_class: `glance-li-prio ${pClass}`, y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(new St.Label({ text: i.state_name || "", style_class: "glance-li-state", y_align: Clutter.ActorAlign.CENTER }));
-        const dueText = i.due_date ? i.due_date.slice(5) : "";
-        row.add_child(new St.Label({ text: dueText, style_class: "glance-li-due " + (i.overdue ? "overdue" : ""), y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(new St.Label({ text: i.title || "", style_class: "glance-li-title", y_align: Clutter.ActorAlign.CENTER, x_expand: true }));
-        children.push(clickableRow(row, () => opts.onOpenUrl && i.url && opts.onOpenUrl(i.url)));
-    }
-    return { meta: `· ${lin.total} open · ${lin.overdue} overdue`, children };
-}
-
-// ── CALENDAR ────────────────────────────────────────────────────────────
-
-function renderCalendar(cal) {
-    const children = [];
-    if (cal.unconfigured) {
-        children.push(emptyRow("calendar not configured"));
-        return { meta: "", children };
-    }
-    if (!cal.authed) {
-        children.push(emptyRow("not authed"));
-        return { meta: "", children };
-    }
-    if (cal.fetch_failed) {
-        children.push(emptyRow("fetch failed"));
-        return { meta: "", children };
-    }
-    if (!cal.events || !cal.events.length) {
-        children.push(emptyRow("nothing upcoming"));
-        return { meta: "", children };
-    }
-    const TODAY = fmt.today(), TOMORROW = fmt.tomorrow();
-    const byDay = new Map();
-    for (const ev of cal.events) {
-        const day = ev.start.slice(0, 10);
-        if (!byDay.has(day)) byDay.set(day, []);
-        byDay.get(day).push(ev);
-    }
-    for (const [day, evs] of byDay) {
-        const label = day === TODAY ? "today" : day === TOMORROW ? "tomorrow" : day;
-        children.push(new St.Label({ text: label, style_class: "glance-cal-day" }));
-        for (const ev of evs) {
-            const row = new St.BoxLayout({ vertical: false, style_class: "glance-cal-event" });
-            const time = ev.start.length >= 16 ? ev.start.slice(11, 16) : "all day";
-            row.add_child(new St.Label({ text: time, style_class: "glance-cal-time", y_align: Clutter.ActorAlign.CENTER }));
-            row.add_child(new St.Label({ text: ev.summary, style_class: "glance-cal-summary", y_align: Clutter.ActorAlign.CENTER, x_expand: true }));
-            children.push(row);
-        }
-    }
-    return { meta: `· ${cal.events.length} upcoming`, children };
+export function setWidgetEnabled(layout, id, enabled) {
+    const out = parseLayout(serializeLayout(layout));
+    const e = out.find(x => x.id === id);
+    if (e) e.enabled = !!enabled;
+    return out;
 }

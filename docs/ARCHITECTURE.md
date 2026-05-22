@@ -75,8 +75,42 @@ extension/
     ├── api.js          # Soup3 HTTP client
     ├── backend.js      # spawn/stop Node.js subprocess
     ├── format.js       # bytes/uptime/clock helpers
-    └── render.js       # St widget construction for the 4-column dashboard
+    ├── widgets.js      # widget registry (remote, sessions, linear, calendar)
+    ├── render.js       # orchestrator: topbar + iterates configured layout
+    └── popout.js       # draggable standalone-window mode
 ```
+
+## Widget layout
+
+The dashboard is a list of widgets rendered side-by-side. The layout is a
+JSON string stored at `widget-layout` in gschema:
+
+```
+[
+  { "id": "remote",   "enabled": true, "weight": 1 },
+  { "id": "sessions", "enabled": true, "weight": 1 },
+  { "id": "linear",   "enabled": true, "weight": 2 },
+  { "id": "calendar", "enabled": true, "weight": 1 }
+]
+```
+
+`weight` (1-8) determines relative column width via a `min-width` proportional
+to the weight. Widgets register themselves with `registerWidget()` in
+`lib/widgets.js`; the parser drops references to unknown ids and appends any
+newly registered widgets disabled-by-default, so an extracted klarum-presence
+widget would slot in automatically.
+
+`edit-mode` is a boolean gschema key. When true, each column header shows
+move-left, move-right, shrink, grow, hide controls. Toggle from the topbar
+gear icon or from prefs.
+
+## Standalone window mode
+
+`Main.layoutManager.addChrome()` is used to attach a `St.BoxLayout` to the
+stage. The popout has a draggable header and a close button. Position is
+persisted in `popout-x` / `popout-y`. Size is set via `popout-width` /
+`popout-height` (editable from the "Pop-out" prefs page). `popout-active`
+remembers whether to reopen on the next session.
 
 ## Threading / lifecycle
 
@@ -85,6 +119,8 @@ extension/
 - Panel button shows compact summary: `P1·n  !overdue  ▸sessions`
 - Click → menu opens, dashboard renders in St widgets, sized to
   `dropdown-width-pct` of primary monitor
+- If `popout-active` was true at enable, the standalone window is restored
+  at its persisted geometry
 - Extension disables → SIGTERM to backend, fallback `force_exit` after 1.5s
 
 ## What we don't do
