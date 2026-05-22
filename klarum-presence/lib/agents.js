@@ -34,6 +34,8 @@ async function listLinuxProcs() {
   try { names = fs.readdirSync("/proc"); } catch { return []; }
   const out = [];
   const now = Date.now();
+  const tps = clockTicksPerSec();
+  const bootSec = bootSeconds();
   for (const n of names) {
     if (!/^\d+$/.test(n)) continue;
     const pid = Number(n);
@@ -48,9 +50,7 @@ async function listLinuxProcs() {
     const fields = stat.slice(rparen + 2).split(/\s+/);
     const ppid = Number(fields[1]);
     const startTicks = Number(fields[19]);
-    const ticksPerSec = 100; // Linux default; close enough for diffing seconds
-    const bootSec = bootSeconds();
-    const startSec = bootSec ? bootSec + (startTicks / ticksPerSec) : null;
+    const startSec = bootSec ? bootSec + (startTicks / tps) : null;
     const etime_s = startSec ? Math.max(0, Math.floor(now / 1000 - startSec)) : null;
     const args = cmdline.split("\0").filter(Boolean).join(" ");
     const argv0 = (args.split(/\s+/)[0] || "");
@@ -59,6 +59,23 @@ async function listLinuxProcs() {
     out.push({ pid, ppid, args, argv0, etime_s, uid });
   }
   return out;
+}
+
+// Cached clock tick rate. Default kernels report 100 but tickless or
+// custom-HZ builds can return 250/300/1000. Resolve once via `getconf
+// CLK_TCK` — sync I/O is acceptable here because the call runs exactly
+// once per agent process at first use, not per request.
+let _tps = null;
+function clockTicksPerSec() {
+  if (_tps != null) return _tps;
+  try {
+    const { execFileSync } = require("child_process");
+    const out = execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 1000 }).trim();
+    const n = Number(out);
+    if (Number.isFinite(n) && n > 0) _tps = n;
+  } catch { /* fall through */ }
+  if (_tps == null) _tps = 100;
+  return _tps;
 }
 
 let _boot = null;
@@ -108,17 +125,30 @@ async function listAgents() {
   const procs = await listProcesses();
   const procByPid = new Map(procs.map(p => [p.pid, p]));
 
+  // Skip a process whose ancestry contains another agent of the same kind.
+  // Walking the full parent chain (not just the immediate parent) handles
+  // launcher-wrapped agents — e.g. `bash -c claude` where the parent's
+  // argv0 isn't itself an agent but the grandparent is. Stops at PID 1, at
+  // a missing PID (process exited mid-walk), or after a small bound so a
+  // pathological cycle can't spin forever.
+  function hasAgentAncestor(start, kind) {
+    let cur = procByPid.get(start.ppid);
+    let hops = 0;
+    while (cur && hops < 64 && cur.pid > 1) {
+      if (classifyArg(cur.argv0) === kind) return true;
+      cur = procByPid.get(cur.ppid);
+      hops++;
+    }
+    return false;
+  }
+
   const me = process.getuid ? process.getuid() : null;
   const agents = [];
   for (const p of procs) {
     if (me != null && p.uid != null && p.uid !== me) continue;
     const kind = classifyArg(p.argv0);
     if (!kind) continue;
-    // Skip child agent processes — only report the top-most agent for the
-    // tree so two-pane sub-agents don't double-count. A parent that is also
-    // the same kind means this is a sub-process.
-    const parent = procByPid.get(p.ppid);
-    if (parent && classifyArg(parent.argv0) === kind) continue;
+    if (hasAgentAncestor(p, kind)) continue;
     agents.push({
       kind,
       state:   "running",

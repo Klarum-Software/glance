@@ -9,9 +9,12 @@ ExecStart=/usr/bin/env node %h/.local/share/klarum-presence/bin/klarum-presence
 Restart=on-failure
 RestartSec=5
 Environment=KLARUM_PRESENCE_PORT=5176
-# Bind to all interfaces by default; the tailnet's WireGuard auth is the
-# access control. To restrict, set this to a specific Tailscale IP.
-Environment=KLARUM_PRESENCE_HOST=0.0.0.0
+# Loopback by default — a fresh host without tailscale shouldn't expose
+# active tmux, cwd, git branch and the agent list to anything LAN-reachable.
+# Once tailscale is verified up, flip to one of:
+#   Environment=KLARUM_PRESENCE_HOST=0.0.0.0
+#   Environment=KLARUM_PRESENCE_HOST=<tailscale ip -4>
+Environment=KLARUM_PRESENCE_HOST=127.0.0.1
 
 [Install]
 WantedBy=default.target
