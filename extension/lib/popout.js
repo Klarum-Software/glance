@@ -81,8 +81,13 @@ class PopoutWindow extends St.BoxLayout {
     addGrip() {}
 
     moveTo(x, y) {
-        this._x = Math.max(0, x | 0);
-        this._y = Math.max(0, y | 0);
+        // Clamp against the primary monitor so a drag past an edge can't strand
+        // the popout off-screen (recoverable only via dconf otherwise).
+        const m = Main.layoutManager.primaryMonitor;
+        const maxX = m ? Math.max(0, m.width  - this._w) : Number.POSITIVE_INFINITY;
+        const maxY = m ? Math.max(0, m.height - this._h) : Number.POSITIVE_INFINITY;
+        this._x = Math.max(0, Math.min(maxX, x | 0));
+        this._y = Math.max(0, Math.min(maxY, y | 0));
         this.set_position(this._x, this._y);
     }
 
@@ -90,6 +95,9 @@ class PopoutWindow extends St.BoxLayout {
         this._w = Math.max(MIN_W, w | 0);
         this._h = Math.max(MIN_H, h | 0);
         this.set_size(this._w, this._h);
+        // A resize may push the bottom-right past the monitor edge — reapply
+        // the move clamp so we don't end up partially off-screen.
+        this.moveTo(this._x, this._y);
     }
 
     geometry() { return { x: this._x, y: this._y, w: this._w, h: this._h }; }

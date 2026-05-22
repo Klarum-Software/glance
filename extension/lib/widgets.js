@@ -3,6 +3,12 @@
 // future klarum-presence extraction shipped as a sibling extension) can
 // register themselves by importing this module and calling registerWidget
 // before the dashboard rebuilds.
+//
+// IMPORTANT: extension/prefs.js maintains a parallel BUILTIN_WIDGETS array
+// of just (id, title) pairs. Prefs runs in a separate GTK process and can't
+// import this St-based module. When adding, renaming, or removing a
+// built-in here, mirror the change in prefs.js or the Widgets prefs page
+// silently drifts.
 
 import Clutter from "gi://Clutter";
 import Pango   from "gi://Pango";
@@ -219,13 +225,6 @@ registerWidget({ id: "remote",   title: "REMOTE",   tagClass: "remote",   defaul
 registerWidget({ id: "sessions", title: "SESSIONS", tagClass: "sessions", defaultWeight: 1, builtIn: true, render: renderSessions });
 registerWidget({ id: "linear",   title: "LINEAR",   tagClass: "linear",   defaultWeight: 2, builtIn: true, render: renderLinear   });
 registerWidget({ id: "calendar", title: "CALENDAR", tagClass: "calendar", defaultWeight: 1, builtIn: true, render: renderCalendar });
-
-export const DEFAULT_LAYOUT = [
-    { id: "remote",   enabled: true, weight: 1 },
-    { id: "sessions", enabled: true, weight: 1 },
-    { id: "linear",   enabled: true, weight: 2 },
-    { id: "calendar", enabled: true, weight: 1 },
-];
 
 // Parse a JSON layout string, drop entries pointing at unknown widgets, and
 // append any registered widgets the saved layout doesn't mention (so a newly

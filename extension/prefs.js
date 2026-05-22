@@ -43,6 +43,7 @@ function serializeLayout(layout) {
 export default class GlancePrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        const cleanups = [];
 
         const page = new Adw.PreferencesPage({ title: "General", icon_name: "preferences-system-symbolic" });
         window.add(page);
@@ -62,11 +63,22 @@ export default class GlancePrefs extends ExtensionPreferences {
 
         const widgetPage = new Adw.PreferencesPage({ title: "Widgets", icon_name: "view-grid-symbolic" });
         window.add(widgetPage);
-        widgetPage.add(makeWidgetsGroup(settings));
+        widgetPage.add(makeWidgetsGroup(settings, cleanups));
 
         const popoutPage = new Adw.PreferencesPage({ title: "Pop-out", icon_name: "video-display-symbolic" });
         window.add(popoutPage);
         popoutPage.add(makePopoutGroup(settings));
+
+        // Adw.PreferencesWindow may be opened and closed repeatedly without
+        // the extension reloading. Disconnect every signal we wired so the
+        // rebuild closures (and the rowsBox they capture) are eligible for GC.
+        window.connect("close-request", () => {
+            for (const fn of cleanups) {
+                try { fn(); } catch (_) {}
+            }
+            cleanups.length = 0;
+            return false;
+        });
     }
 }
 
@@ -93,7 +105,7 @@ function makePathRow(settings, key, title) {
 
 // ── widget management group ─────────────────────────────────────────────
 
-function makeWidgetsGroup(settings) {
+function makeWidgetsGroup(settings, cleanups) {
     const group = new Adw.PreferencesGroup({
         title: "Layout",
         description: "Toggle, reorder, and resize dashboard widgets. Changes apply immediately.",
@@ -139,7 +151,8 @@ function makeWidgetsGroup(settings) {
     };
 
     rebuild();
-    settings.connect("changed::widget-layout", rebuild);
+    const id = settings.connect("changed::widget-layout", rebuild);
+    if (cleanups) cleanups.push(() => settings.disconnect(id));
 
     const wrapper = new Adw.PreferencesRow({ activatable: false, focusable: false });
     wrapper.set_child(rowsBox);

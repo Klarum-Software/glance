@@ -138,7 +138,7 @@ class GlanceIndicator extends PanelMenu.Button {
         // set_width is clamped by PopupMenu on some shell versions; min-width via
         // inline style on our .glance-menu style_class survives the clamp.
         this.menu.box.set_style(`min-width: ${width}px;`);
-        this._dashboard.set_style(`min-width: ${width - 24}px; height: ${height}px;`);
+        this._dashboard.set_style(`min-width: ${width - 24}px; min-height: ${height}px;`);
         this._refresh();
     }
 
