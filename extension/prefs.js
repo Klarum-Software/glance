@@ -419,11 +419,8 @@ function openCustomWidgetDialog(parent, settings, entry, index) {
             return;
         }
         if (!name) { statusLabel.set_label("display name is required"); return; }
-        try {
-            const u = new URL(url);
-            if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("must be http or https");
-        } catch (e) {
-            statusLabel.set_label("invalid URL: " + e.message);
+        if (!/^https?:\/\/\S+$/i.test(url)) {
+            statusLabel.set_label("URL must start with http:// or https://");
             return;
         }
 
