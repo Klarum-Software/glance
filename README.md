@@ -50,16 +50,50 @@ A dot appears in the top panel. Click it for the dashboard.
 {
   "port": 5175,
   "inboxDir": "/home/you/claude-inbox",
-  "calendarBin": "/home/you/repos/noah-tools/lib/calendar.js",
-  "linearSyncUrl": "http://127.0.0.1:5174/api/linear/sync",
+  "calendarBin": "/home/you/repos/glance/server/bin/gcal.js",
+  "linearApiKey": "lin_api_...",
   "services": ["orchestrator", "inbox-ui", "work-tmux"],
   "meEmails": ["you@example.com"]
 }
 ```
 
 Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
-`GLANCE_CALENDAR_BIN`, `GLANCE_LINEAR_SYNC`, `GLANCE_SERVICES`,
-`GLANCE_ME_EMAILS`). See `server/config.js`.
+`GLANCE_CALENDAR_BIN`, `GLANCE_LINEAR_SYNC`, `GLANCE_LINEAR_API_KEY`,
+`GLANCE_SERVICES`, `GLANCE_ME_EMAILS`). See `server/config.js`.
+
+## Connecting your accounts
+
+### Linear
+
+Create a personal API key at <https://linear.app/settings/api> (Personal
+API keys -> Create key). Paste it into `linearApiKey` in
+`~/.config/glance/config.json` (or export `GLANCE_LINEAR_API_KEY`).
+
+The backend's `POST /api/sync-linear` will fetch your assigned, non-closed
+issues directly from the Linear GraphQL API and cache them under
+`<inboxDir>/.linear-cache/`. Click the sync button in the LINEAR column
+header to refresh on demand.
+
+If you'd rather sync via an external service (e.g. inbox-ui), set
+`linearSyncUrl` instead. `linearApiKey` takes precedence when both are
+set.
+
+### Google Calendar
+
+Each user supplies their own OAuth Desktop client (created in their own
+Google Cloud project) so this repo never embeds shared credentials. Full
+walkthrough: [docs/CALENDAR-SETUP.md](docs/CALENDAR-SETUP.md).
+
+Short version:
+
+1. Create an OAuth 2.0 Client ID (Desktop app) at
+   <https://console.cloud.google.com>, enable the Google Calendar API,
+   add yourself as a test user.
+2. Run `node server/bin/gcal-auth.js`, paste the client id and secret,
+   complete the browser consent.
+3. Set `calendarBin` in `~/.config/glance/config.json` to the path the
+   auth helper prints (`server/bin/gcal.js`).
+4. Disable/enable the extension. Events appear within a refresh cycle.
 
 ## What it shows
 
