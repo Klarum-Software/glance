@@ -1,0 +1,20 @@
+[Unit]
+Description=klarum-presence agent
+Documentation=https://github.com/Klarum-Software/glance
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env node %h/.local/share/klarum-presence/bin/klarum-presence
+Restart=on-failure
+RestartSec=5
+Environment=KLARUM_PRESENCE_PORT=5176
+# KLARUM_PRESENCE_HOST is intentionally unset so the agent auto-binds to
+# `tailscale ip -4` when tailscale is up (tailnet-only by interface), and
+# falls back to 127.0.0.1 on hosts without tailscale. Uncomment one of the
+# overrides below to pin the bind address:
+#   Environment=KLARUM_PRESENCE_HOST=0.0.0.0
+#   Environment=KLARUM_PRESENCE_HOST=127.0.0.1
+
+[Install]
+WantedBy=default.target

@@ -132,6 +132,73 @@ async function gatherManualPeers() {
   }));
 }
 
+// In-memory ring buffer of recent load_1m/mem_pct samples per peer, used to
+// render the Unicode sparklines in the REMOTE column. Lost on restart by
+// design (no DB, no deps). Keyed by hostname+ip so an IP rotation doesn't
+// duplicate the series. Stale entries (peers we haven't seen for
+// REMOTE_HISTORY_TTL_MS) are swept on each gather so the map can't grow
+// unbounded across renamed peers or rotated IPs.
+const REMOTE_HISTORY = new Map();
+const REMOTE_HISTORY_LEN     = 32;
+const REMOTE_HISTORY_TTL_MS  = 30 * 60_000;
+const SPARK_GLYPHS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+// Load sparkline scale: 2.0 is the "this CPU is busy" threshold for a
+// single-core machine; clamp to the actual core count so a 16-core box
+// doesn't render a constant ▁ when fully loaded. Cached because os.cpus()
+// is a syscall on some platforms.
+const os = require("os");
+const LOAD_SPARK_MAX = Math.max(2.0, (os.cpus() || []).length || 2.0);
+
+function peerKey(peer) {
+  return `${peer.hostname || "?"}@${peer.ip || "?"}`;
+}
+
+function pushSample(peer) {
+  if (!peer.snapshot) return;
+  const key = peerKey(peer);
+  let hist = REMOTE_HISTORY.get(key);
+  if (!hist) { hist = { load: [], mem: [], lastSeen: 0 }; REMOTE_HISTORY.set(key, hist); }
+  hist.lastSeen = Date.now();
+  if (Number.isFinite(peer.snapshot.load_1m)) {
+    hist.load.push(peer.snapshot.load_1m);
+    if (hist.load.length > REMOTE_HISTORY_LEN) hist.load.shift();
+  }
+  if (Number.isFinite(peer.snapshot.mem_pct)) {
+    hist.mem.push(peer.snapshot.mem_pct);
+    if (hist.mem.length > REMOTE_HISTORY_LEN) hist.mem.shift();
+  }
+}
+
+function sweepHistory() {
+  const cutoff = Date.now() - REMOTE_HISTORY_TTL_MS;
+  for (const [k, h] of REMOTE_HISTORY) {
+    if (h.lastSeen < cutoff) REMOTE_HISTORY.delete(k);
+  }
+}
+
+function sparkline(samples, scaleMax) {
+  if (!samples || !samples.length) return null;
+  const max = scaleMax != null ? scaleMax : Math.max(0.5, ...samples);
+  return samples
+    .map(v => {
+      if (!Number.isFinite(v)) return SPARK_GLYPHS[0];
+      const i = Math.max(0, Math.min(SPARK_GLYPHS.length - 1,
+        Math.round((v / max) * (SPARK_GLYPHS.length - 1))));
+      return SPARK_GLYPHS[i];
+    })
+    .join("");
+}
+
+function decorateWithSparks(peer) {
+  if (!peer.snapshot) return peer;
+  const hist = REMOTE_HISTORY.get(peerKey(peer));
+  if (!hist) return peer;
+  peer.snapshot.spark_load = sparkline(hist.load, LOAD_SPARK_MAX);
+  peer.snapshot.spark_mem  = sparkline(hist.mem,  100);
+  return peer;
+}
+
 async function gatherRemote() {
   const manualP = gatherManualPeers();
 
@@ -179,6 +246,9 @@ async function gatherRemote() {
 
   const manual = await manualP;
   const peers = [...tsPeers, ...manual];
+
+  for (const p of peers) { pushSample(p); decorateWithSparks(p); }
+  sweepHistory();
 
   peers.sort((a, b) => {
     if (a.is_self !== b.is_self) return a.is_self ? -1 : 1;

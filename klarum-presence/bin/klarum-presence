@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// klarum-presence agent. Serves the current presence snapshot at GET
+// /presence. Zero npm dependencies.
+//
+//   KLARUM_PRESENCE_PORT  (default 5176)
+//   KLARUM_PRESENCE_HOST  (default: tailnet IP if `tailscale ip -4` returns
+//                          one, else 127.0.0.1)
+//
+// Auto-binding to the tailnet interface means a fresh install is reachable
+// from peers without manual config, while a host without tailscale stays on
+// loopback. The snapshot (active_tmux / agents / git / load) is never
+// exposed to a non-tailnet interface unless the user explicitly sets
+// KLARUM_PRESENCE_HOST=0.0.0.0.
+
+"use strict";
+
+const http = require("http");
+const path = require("path");
+const { execFileSync } = require("child_process");
+
+const { snapshot } = require(path.join(__dirname, "..", "lib", "presence"));
+
+const PORT = Number(process.env.KLARUM_PRESENCE_PORT) || 5176;
+const HOST = process.env.KLARUM_PRESENCE_HOST || resolveTailnetIp() || "127.0.0.1";
+
+function resolveTailnetIp() {
+  try {
+    const out = execFileSync("tailscale", ["ip", "-4"], {
+      timeout: 500,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim().split("\n")[0].trim();
+    return /^100\.\d+\.\d+\.\d+$/.test(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function send(res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  });
+  res.end(json);
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "GET" && (req.url === "/presence" || req.url === "/")) {
+      const snap = await snapshot();
+      return send(res, 200, snap);
+    }
+    if (req.method === "GET" && req.url === "/health") {
+      return send(res, 200, { ok: true });
+    }
+    send(res, 404, { error: "not found" });
+  } catch (e) {
+    send(res, 500, { error: e.message });
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`klarum-presence listening on http://${HOST}:${PORT}/presence`);
+});
+
+function shutdown() {
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 2000).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT",  shutdown);
