@@ -61,5 +61,10 @@
       <summary>Pop-out window height</summary>
       <description>Last height of the standalone dashboard window in pixels. Minimum 240.</description>
     </key>
+    <key name="custom-widgets" type="s">
+      <default>'[]'</default>
+      <summary>Custom HTTP-endpoint widgets (JSON)</summary>
+      <description>User-defined widgets that fetch an arbitrary HTTP URL and render its JSON response. Each entry: { id, name, url, refreshSec, view, jsonPath?, headers? }. The extension pushes this array to the backend, which polls each URL and returns the data under state.custom[id].</description>
+    </key>
   </schema>
 </schemalist>

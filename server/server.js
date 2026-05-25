@@ -633,8 +633,169 @@ async function gatherState() {
     sessions: gatherSessions(),
     remote,
     linear, calendar, inbox,
+    custom: snapshotCustom(),
   };
 }
+
+// ── custom HTTP-endpoint widgets ───────────────────────────────────────────
+// User-defined widgets that poll an arbitrary URL on an interval. Config is
+// pushed from the extension (gsettings) via POST /api/config/custom-widgets
+// and persisted to ~/.config/glance/config.json so a restart picks them up.
+//
+// Each entry: { id, name, url, refreshSec, view, jsonPath?, headers? }.
+//   id          stable kebab-case identifier, used as widget id
+//   name        display name in the column header
+//   url         http(s) URL to GET; must parse as URL
+//   refreshSec  poll interval in seconds (5..3600)
+//   view        'auto' | 'kv' | 'list' | 'raw'
+//   jsonPath    dot path into the response (e.g. "data.items"); optional
+//   headers     { name: value } for Authorization etc; optional
+//
+// Network safety note: this is the one part of the server that talks beyond
+// 127.0.0.1 / tailnet. URLs are opted-in by the user; we do not fetch
+// anything until they configure it.
+
+const CUSTOM_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const CUSTOM_VIEWS = new Set(["auto", "kv", "list", "raw"]);
+
+const customResults = new Map();  // id → { ok, data, error, fetched_at, view, name }
+const customTimers  = new Map();  // id → setTimeout/Interval handle
+
+function snapshotCustom() {
+  const out = {};
+  for (const [id, r] of customResults) out[id] = r;
+  return out;
+}
+
+function validateCustomEntry(e) {
+  if (!e || typeof e !== "object") return "missing entry";
+  const id = typeof e.id === "string" ? e.id.trim() : "";
+  const name = typeof e.name === "string" ? e.name.trim() : "";
+  const url  = typeof e.url  === "string" ? e.url.trim()  : "";
+  const refreshSec = Number(e.refreshSec);
+  const view = typeof e.view === "string" ? e.view : "auto";
+  const jsonPath = typeof e.jsonPath === "string" ? e.jsonPath.trim() : "";
+  const headers  = (e.headers && typeof e.headers === "object" && !Array.isArray(e.headers)) ? e.headers : {};
+
+  if (!CUSTOM_ID_RE.test(id)) return `id must match ${CUSTOM_ID_RE}`;
+  if (!name) return "name required";
+  if (!url)  return "url required";
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "url protocol must be http or https";
+  } catch { return "url could not be parsed"; }
+  if (!Number.isFinite(refreshSec) || refreshSec < 5 || refreshSec > 3600) return "refreshSec must be 5..3600";
+  if (!CUSTOM_VIEWS.has(view)) return `view must be one of ${[...CUSTOM_VIEWS].join(",")}`;
+
+  const safeHeaders = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof k !== "string" || !/^[A-Za-z0-9-]+$/.test(k)) return `header key '${k}' invalid`;
+    if (typeof v !== "string") return `header '${k}' value must be a string`;
+    safeHeaders[k] = v;
+  }
+
+  return { id, name, url, refreshSec, view, jsonPath, headers: safeHeaders };
+}
+
+function fetchCustomOnce(entry) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(entry.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...entry.headers },
+      timeout:  5000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if (r.statusCode < 200 || r.statusCode >= 300) {
+          return resolve({ ok: false, error: `http ${r.statusCode}`, status: r.statusCode, body: body.slice(0, 400) });
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); }
+        catch { return resolve({ ok: true, data: body.length > 8192 ? body.slice(0, 8192) + "…" : body, isText: true }); }
+        let data = parsed;
+        if (entry.jsonPath) {
+          for (const seg of entry.jsonPath.split(".")) {
+            if (data == null) break;
+            data = data[seg];
+          }
+        }
+        resolve({ ok: true, data });
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+    req.end();
+  });
+}
+
+async function tickCustom(entry) {
+  const result = await fetchCustomOnce(entry);
+  customResults.set(entry.id, {
+    ...result,
+    fetched_at: new Date().toISOString(),
+    view: entry.view,
+    name: entry.name,
+  });
+}
+
+function startCustomPoller(entry) {
+  stopCustomPoller(entry.id);
+  // immediate fetch, then periodic
+  tickCustom(entry);
+  const h = setInterval(() => tickCustom(entry), entry.refreshSec * 1000);
+  customTimers.set(entry.id, h);
+}
+
+function stopCustomPoller(id) {
+  const h = customTimers.get(id);
+  if (h) { clearInterval(h); customTimers.delete(id); }
+  customResults.delete(id);
+}
+
+function applyCustomConfig(list) {
+  const seen = new Set();
+  for (const raw of list) {
+    const v = validateCustomEntry(raw);
+    if (typeof v === "string") continue;
+    seen.add(v.id);
+    startCustomPoller(v);
+  }
+  for (const id of [...customTimers.keys()]) {
+    if (!seen.has(id)) stopCustomPoller(id);
+  }
+}
+
+function actionSetCustomWidgets(body) {
+  if (!body || !Array.isArray(body.widgets)) return { ok: false, error: "expected { widgets: [...] }" };
+  const valid = [];
+  const errors = [];
+  const ids = new Set();
+  for (const e of body.widgets) {
+    const v = validateCustomEntry(e);
+    if (typeof v === "string") { errors.push({ entry: e, error: v }); continue; }
+    if (ids.has(v.id)) { errors.push({ entry: e, error: `duplicate id ${v.id}` }); continue; }
+    ids.add(v.id);
+    valid.push(v);
+  }
+  try {
+    cfg = configMod.mutate((current) => ({ ...current, customWidgets: valid }));
+  } catch (e) {
+    return { ok: false, error: "could not persist: " + e.message };
+  }
+  applyCustomConfig(valid);
+  return { ok: true, accepted: valid.length, rejected: errors };
+}
+
+if (Array.isArray(cfg.customWidgets)) applyCustomConfig(cfg.customWidgets);
 
 // ── action handlers ────────────────────────────────────────────────────────
 
@@ -1053,6 +1214,14 @@ const server = http.createServer(async (req, res) => {
         return send(res, r.ok ? 200 : (r.statusCode || 400), r);
       }
     }
+    if (req.method === "GET" && req.url === "/api/config/custom-widgets") {
+      return send(res, 200, { widgets: Array.isArray(cfg.customWidgets) ? cfg.customWidgets : [] });
+    }
+    if (req.method === "POST" && req.url === "/api/config/custom-widgets") {
+      const body = await readBody(req);
+      const r = actionSetCustomWidgets(body);
+      return send(res, r.ok ? 200 : 400, r);
+    }
     if (req.method === "GET") return serveStatic(req, res);
     send(res, 405, { error: "method not allowed" });
   } catch (e) {
@@ -1075,6 +1244,7 @@ server.listen(cfg.port, cfg.host, () => {
 
 // Graceful shutdown so the extension can stop us cleanly.
 function shutdown() {
+  for (const id of [...customTimers.keys()]) stopCustomPoller(id);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 2000).unref();
 }

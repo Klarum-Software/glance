@@ -18,7 +18,7 @@ import * as PopupMenu  from "resource:///org/gnome/shell/ui/popupMenu.js";
 import { Backend, resolveServerPath, resolveNodePath } from "./lib/backend.js";
 import * as api    from "./lib/api.js";
 import { renderDashboard, moveWidget, resizeWidget, setWidgetEnabled } from "./lib/render.js";
-import { parseLayout, serializeLayout } from "./lib/widgets.js";
+import { parseLayout, serializeLayout, registerCustomWidgets } from "./lib/widgets.js";
 import { PopoutWindow, addPopoutToShell, removePopoutFromShell } from "./lib/popout.js";
 
 const GlanceIndicator = GObject.registerClass(
@@ -92,6 +92,12 @@ class GlanceIndicator extends PanelMenu.Button {
         })]);
         this._handlerIds.push([this._settings, this._settings.connect("changed::popout-width",  () => this._reflowPopout())]);
         this._handlerIds.push([this._settings, this._settings.connect("changed::popout-height", () => this._reflowPopout())]);
+        this._handlerIds.push([this._settings, this._settings.connect("changed::custom-widgets", () => this._onCustomWidgetsChanged())]);
+
+        // Initial registration of user-defined widgets so they appear in the
+        // layout before the first render. The backend push happens later, once
+        // the backend health probe in _onOpen / start finishes.
+        this._applyCustomWidgets();
 
         // ── backend ─────────────────────────────────────────────────────
         const port = this._settings.get_int("backend-port");
@@ -115,6 +121,7 @@ class GlanceIndicator extends PanelMenu.Button {
         }
 
         this._startPolling();
+        this._pushCustomWidgetsToBackend();
 
         if (this._settings.get_boolean("popout-active")) {
             this._openPopout();
@@ -196,6 +203,50 @@ class GlanceIndicator extends PanelMenu.Button {
     _openUrl(url) {
         if (!this._backend || !url) return;
         api.post(`${this._backend.url}/api/open`, { url }, this._cancellable).catch(() => {});
+    }
+
+    _parseCustomWidgets() {
+        try {
+            const raw = JSON.parse(this._settings.get_string("custom-widgets") || "[]");
+            return Array.isArray(raw) ? raw : [];
+        } catch (_) { return []; }
+    }
+
+    _applyCustomWidgets() {
+        const configs = this._parseCustomWidgets();
+        const ids     = registerCustomWidgets(configs);
+        // Ensure newly added custom widgets appear (enabled) in the layout so
+        // the user sees them immediately. Existing custom entries keep their
+        // enabled/weight; removed ones are pruned by parseLayout next render.
+        const layout = parseLayout(this._settings.get_string("widget-layout"));
+        let mutated = false;
+        const haveLayoutId = new Set(layout.map(e => e.id));
+        for (const id of ids) {
+            if (!haveLayoutId.has(id)) {
+                layout.push({ id, enabled: true, weight: 1 });
+                mutated = true;
+            }
+        }
+        if (mutated) {
+            this._settings.set_string("widget-layout", serializeLayout(layout));
+        }
+    }
+
+    _onCustomWidgetsChanged() {
+        this._applyCustomWidgets();
+        this._pushCustomWidgetsToBackend();
+        this._rerender();
+    }
+
+    async _pushCustomWidgetsToBackend() {
+        if (!this._backend) return;
+        const widgets = this._parseCustomWidgets();
+        const ok = await api.waitForHealth(this._backend.url, 8000, 300, this._cancellable);
+        if (!ok) return;
+        try {
+            await api.post(`${this._backend.url}/api/config/custom-widgets`, { widgets }, this._cancellable);
+            this._refresh();
+        } catch (_) { /* server will pick them up on next start from config.json */ }
     }
 
     _mutateLayout(fn) {

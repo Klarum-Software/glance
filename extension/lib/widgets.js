@@ -31,13 +31,40 @@ export function registerWidget(widget) {
         tagClass:      widget.tagClass || widget.id,
         defaultWeight: widget.defaultWeight || 1,
         builtIn:       !!widget.builtIn,
+        custom:        !!widget.custom,
         render:        widget.render,
     });
     return widget;
 }
 
+export function unregisterWidget(id) { REGISTRY.delete(id); }
 export function getWidget(id) { return REGISTRY.get(id); }
 export function listWidgets() { return Array.from(REGISTRY.values()); }
+
+// Register or update the user-defined custom widgets. Called whenever the
+// custom-widgets gsettings key changes. Returns the list of ids that are
+// currently registered as custom, so the caller can prune stale layout
+// entries.
+export function registerCustomWidgets(configs) {
+    for (const [id, w] of [...REGISTRY.entries()]) {
+        if (w.custom) REGISTRY.delete(id);
+    }
+    const ids = [];
+    for (const c of (Array.isArray(configs) ? configs : [])) {
+        if (!c || typeof c.id !== "string") continue;
+        const id = c.id;
+        registerWidget({
+            id,
+            title:         (c.name || id).toUpperCase(),
+            tagClass:      "custom",
+            defaultWeight: 1,
+            custom:        true,
+            render:        (state) => renderCustom(state, c),
+        });
+        ids.push(id);
+    }
+    return ids;
+}
 
 // ── shared helpers used by renderers ────────────────────────────────────
 
@@ -271,6 +298,103 @@ function renderInbox(state, opts) {
     }
     const metaSuffix = inbox.important_only ? " important unread" : " unread";
     return { meta: `· ${inbox.unread_count}${metaSuffix}`, children };
+}
+
+// ── CUSTOM (user HTTP endpoints) ────────────────────────────────────────
+
+function renderCustom(state, cfg) {
+    const all = state.custom || {};
+    const slot = all[cfg.id];
+    const children = [];
+    if (!slot) {
+        children.push(emptyRow("loading..."));
+        return { meta: "", children };
+    }
+    if (!slot.ok) {
+        children.push(emptyRow(`fetch failed: ${slot.error || "unknown"}`));
+        return { meta: "", children };
+    }
+    const data = slot.data;
+    const view = slot.view || cfg.view || "auto";
+    const meta = slot.fetched_at ? `· ${slot.fetched_at.slice(11, 16)}` : "";
+
+    if (slot.isText) {
+        children.push(makeCodeBlock(String(data ?? "")));
+        return { meta, children };
+    }
+
+    const chosen = view === "auto" ? autoView(data) : view;
+    if (chosen === "kv" && data && typeof data === "object" && !Array.isArray(data)) {
+        for (const [k, v] of Object.entries(data)) {
+            children.push(makeKvRow(k, v));
+        }
+        if (!children.length) children.push(emptyRow("no fields"));
+    } else if (chosen === "list" && Array.isArray(data)) {
+        for (const item of data.slice(0, 50)) {
+            children.push(makeListRow(item));
+        }
+        if (!children.length) children.push(emptyRow("no items"));
+        if (data.length > 50) children.push(new St.Label({
+            text: `+${data.length - 50} more`,
+            style_class: "glance-empty",
+        }));
+    } else {
+        children.push(makeCodeBlock(safeStringify(data)));
+    }
+    return { meta, children };
+}
+
+function autoView(data) {
+    if (Array.isArray(data)) return "list";
+    if (data && typeof data === "object") return "kv";
+    return "raw";
+}
+
+function safeStringify(v) {
+    try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+function makeKvRow(key, value) {
+    const row = new St.BoxLayout({ vertical: false, style_class: "glance-custom-kv" });
+    row.add_child(new St.Label({
+        text: String(key),
+        style_class: "glance-custom-key",
+        y_align: Clutter.ActorAlign.CENTER,
+    }));
+    const v = (value !== null && typeof value === "object") ? safeStringify(value) : String(value);
+    const label = new St.Label({
+        text: v,
+        style_class: "glance-custom-val",
+        y_align: Clutter.ActorAlign.CENTER,
+        x_expand: true,
+    });
+    label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    row.add_child(label);
+    return row;
+}
+
+function makeListRow(item) {
+    let text;
+    if (item === null || item === undefined) text = String(item);
+    else if (typeof item === "object") text = safeStringify(item);
+    else text = String(item);
+    const label = new St.Label({
+        text,
+        style_class: "glance-custom-list",
+        x_expand: true,
+    });
+    label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    return label;
+}
+
+function makeCodeBlock(text) {
+    const label = new St.Label({
+        text: text.length > 4000 ? text.slice(0, 4000) + "\n..." : text,
+        style_class: "glance-custom-raw",
+        x_expand: true,
+    });
+    label.clutter_text.line_wrap = true;
+    return label;
 }
 
 // ── built-in registrations ──────────────────────────────────────────────
