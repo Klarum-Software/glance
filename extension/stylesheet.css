@@ -217,6 +217,14 @@
 .glance-cal-time   { color: #e1e3e8; font-size: 11px; min-width: 40px; font-feature-settings: "tnum"; }
 .glance-cal-summary { color: #e1e3e8; font-size: 11px; }
 
+/* ── inbox ──────────────────────────────────────────────────────────── */
+
+.glance-inbox-row { spacing: 8px; padding: 2px 6px; }
+.glance-inbox-row.team { border-left: 2px solid #c084fc; padding-left: 4px; }
+.glance-inbox-from    { color: #82868f; font-size: 11px; min-width: 96px; max-width: 120px; }
+.glance-inbox-subject { color: #e1e3e8; font-size: 11px; }
+.glance-inbox-subject.has-meeting { color: #d1e3d0; }
+
 /* ── pop-out window ─────────────────────────────────────────────────── */
 
 .glance-popout {

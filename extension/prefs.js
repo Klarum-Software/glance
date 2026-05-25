@@ -15,6 +15,7 @@ const BUILTIN_WIDGETS = [
     { id: "sessions", title: "Claude sessions"          },
     { id: "linear",   title: "Linear queue"             },
     { id: "calendar", title: "Calendar"                 },
+    { id: "inbox",    title: "Inbox (Gmail)"             },
 ];
 
 function parseLayout(json) {

@@ -28,8 +28,13 @@ let   cfg        = configMod.load();
 const PKG       = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const CAL_CACHE  = path.join(cfg.inboxDir, ".cal-cache.json");
+const GMAIL_CACHE = path.join(cfg.inboxDir, ".gmail-cache.json");
 
 const PEER_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+// Gmail message IDs are lowercase hex (currently 16 chars). Allow alphanumeric
+// + underscore as a forward-compatible safelist; reject everything else so a
+// path like "../../etc" can never reach the spawn call.
+const GMAIL_ID_RE  = /^[a-zA-Z0-9_-]{1,64}$/;
 // RFC1123 hostname (letters, digits, hyphens, dots; no leading/trailing hyphen
 // in any label) OR a plain IPv4 dotted-quad. IPv6 not validated here — would
 // need bracket-stripping + colon parsing; not worth the surface area for a
@@ -362,6 +367,182 @@ async function gatherCalendar() {
   return { authed: true, fetch_failed: false, events: parseCalCache(text) };
 }
 
+// ── inbox (gmail) ─────────────────────────────────────────────────────────
+
+// "*" globs: translated to a case-insensitive regex with full-string anchors.
+// Any other regex metacharacters in the pattern are escaped, so a pattern
+// like "[CRON]*" matches subjects literally starting with "[CRON]".
+function globToRegex(pat) {
+  const escaped = pat.replace(/[.+^${}()|\\[\]]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp("^" + escaped + "$", "i");
+}
+
+function buildBlacklist(bl) {
+  const fromRes    = (bl && Array.isArray(bl.fromPatterns)    ? bl.fromPatterns    : []).map(globToRegex);
+  const subjectRes = (bl && Array.isArray(bl.subjectPatterns) ? bl.subjectPatterns : []).map(globToRegex);
+  const labelSet   = new Set((bl && Array.isArray(bl.labelExcludes) ? bl.labelExcludes : []).map(s => s.toUpperCase()));
+  return { fromRes, subjectRes, labelSet };
+}
+
+function parseGmailListing(text) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const parts = line.split("\t");
+    if (parts.length < 4) continue;
+    const [id, ts, from, ...rest] = parts;
+    rows.push({ id, ts, from, subject: rest.join("\t") });
+  }
+  return rows;
+}
+
+// Server-side filter: gmail.js does not see the blacklist, so the column-level
+// filter runs here. Note: labelExcludes can't be applied without an extra API
+// call per message (the list output omits labels for compactness), so we
+// fall back to letting Gmail's query handle category exclusions by encoding
+// them into the list query when configured. The labelSet field is kept for
+// future use if we ever fetch labels in list output.
+function filterByBlacklist(rows, bl) {
+  return rows.filter(r => {
+    if (bl.fromRes.some(re => re.test(r.from || ""))) return false;
+    if (bl.subjectRes.some(re => re.test(r.subject || ""))) return false;
+    return true;
+  });
+}
+
+function runGmail(args, opts = {}) {
+  return new Promise((resolve) => {
+    if (!cfg.gmailBin) return resolve({ ok: false, code: -1, stdout: "", stderr: "gmailBin not configured" });
+    const env = { ...process.env };
+    if (Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length) {
+      env.GLANCE_GMAIL_SUMMARIZER_CMD = JSON.stringify(cfg.gmailSummarizerCmd);
+    }
+    const out = [], err = [];
+    const child = spawn("node", [cfg.gmailBin, ...args], { stdio: ["pipe", "pipe", "pipe"], env });
+    child.stdout.on("data", c => out.push(c));
+    child.stderr.on("data", c => err.push(c));
+    child.on("close", code => resolve({
+      ok: code === 0,
+      code,
+      stdout: Buffer.concat(out).toString("utf8"),
+      stderr: Buffer.concat(err).toString("utf8"),
+    }));
+    child.on("error", e => resolve({ ok: false, code: -1, stdout: "", stderr: e.message }));
+    if (opts.stdin != null) {
+      child.stdin.write(opts.stdin);
+      child.stdin.end();
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+function defaultInboxQuery() {
+  return cfg.gmailImportantOnly
+    ? "is:unread in:inbox is:important"
+    : "is:unread in:inbox";
+}
+
+function refreshGmailCache() {
+  return new Promise(async (resolve) => {
+    const r = await runGmail(["list", String(cfg.gmailMaxUnread || 20), defaultInboxQuery()]);
+    try {
+      if (r.ok) fs.writeFileSync(GMAIL_CACHE, r.stdout);
+      else fs.writeFileSync(GMAIL_CACHE, "__FETCH_FAILED__\n" + (r.stderr || ""));
+    } catch {}
+    resolve(r);
+  });
+}
+
+// Strip the address out of an RFC822 From header like '"Jane" <jane@x.com>'.
+function extractEmail(headerValue) {
+  if (!headerValue) return null;
+  const angle = headerValue.match(/<([^>]+)>/);
+  const raw = (angle ? angle[1] : headerValue).trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+$/.test(raw) ? raw : null;
+}
+
+// Email -> next-upcoming-event map, refreshed on the same 60s cadence as the
+// calendar list cache. Empty when calendarBin is unset or the attendees fetch
+// fails; absence is silently treated as "no context to attach."
+const CAL_CONTEXT = { map: new Map(), fetchedAt: 0 };
+
+function fetchCalendarContext() {
+  return new Promise((resolve) => {
+    if (!cfg.calendarBin) { CAL_CONTEXT.map = new Map(); CAL_CONTEXT.fetchedAt = Date.now(); return resolve(); }
+    const out = [];
+    const child = spawn("node", [cfg.calendarBin, "attendees", "7"], { stdio: ["ignore", "pipe", "ignore"] });
+    child.stdout.on("data", c => out.push(c));
+    child.on("close", () => {
+      const map = new Map();
+      const text = Buffer.concat(out).toString("utf8");
+      for (const line of text.split("\n")) {
+        const parts = line.split("\t");
+        if (parts.length < 3) continue;
+        const [start, email, summary] = parts;
+        if (!email || map.has(email)) continue;
+        map.set(email, { start, summary });
+      }
+      CAL_CONTEXT.map = map;
+      CAL_CONTEXT.fetchedAt = Date.now();
+      resolve();
+    });
+    child.on("error", () => { CAL_CONTEXT.fetchedAt = Date.now(); resolve(); });
+  });
+}
+
+async function ensureCalendarContext() {
+  if (Date.now() - CAL_CONTEXT.fetchedAt < 60_000) return;
+  await fetchCalendarContext();
+}
+
+function decorateInboxItems(items) {
+  const teamSet = new Set((cfg.teamEmails || []).map(e => String(e).toLowerCase()));
+  for (const m of items) {
+    const email = extractEmail(m.from);
+    m.from_email = email;
+    m.is_team = !!(email && teamSet.has(email));
+    const ctx = email ? CAL_CONTEXT.map.get(email) : null;
+    m.meeting = ctx || null;
+  }
+  items.sort((a, b) => {
+    if (a.is_team !== b.is_team) return a.is_team ? -1 : 1;
+    return (b.ts || "").localeCompare(a.ts || "");
+  });
+  return items;
+}
+
+async function gatherInbox() {
+  if (!cfg.gmailBin) {
+    return { authed: false, fetch_failed: false, unread_count: 0, items: [], unconfigured: true };
+  }
+  let needs = true;
+  try {
+    const st = fs.statSync(GMAIL_CACHE);
+    if ((Date.now() - st.mtimeMs) < 60_000) needs = false;
+  } catch {}
+  let text = "";
+  if (needs) {
+    const r = await refreshGmailCache();
+    text = r.ok ? r.stdout : "";
+  } else {
+    try { text = fs.readFileSync(GMAIL_CACHE, "utf8"); } catch {}
+  }
+  if (!text || text.startsWith("__FETCH_FAILED__")) {
+    return { authed: false, fetch_failed: text.startsWith("__FETCH_FAILED__"), unread_count: 0, items: [] };
+  }
+  await ensureCalendarContext();
+  const bl = buildBlacklist(cfg.gmailBlacklist);
+  const filtered = decorateInboxItems(filterByBlacklist(parseGmailListing(text), bl));
+  return {
+    authed: true,
+    fetch_failed: false,
+    important_only: !!cfg.gmailImportantOnly,
+    unread_count: filtered.length,
+    items: filtered,
+  };
+}
+
 function gatherMemory() {
   return platform.memoryInfo();
 }
@@ -437,10 +618,11 @@ function gatherSessions() {
 }
 
 async function gatherState() {
-  const [linear, calendar, remote] = await Promise.all([
+  const [linear, calendar, remote, inbox] = await Promise.all([
     Promise.resolve(gatherLinear()),
     gatherCalendar(),
     gatherRemote(),
+    gatherInbox(),
   ]);
   return {
     now: new Date().toISOString(),
@@ -450,7 +632,7 @@ async function gatherState() {
     memory: gatherMemory(),
     sessions: gatherSessions(),
     remote,
-    linear, calendar,
+    linear, calendar, inbox,
     custom: snapshotCustom(),
   };
 }
@@ -619,6 +801,7 @@ if (Array.isArray(cfg.customWidgets)) applyCustomConfig(cfg.customWidgets);
 
 async function actionRefresh() {
   try { fs.unlinkSync(CAL_CACHE); } catch {}
+  try { fs.unlinkSync(GMAIL_CACHE); } catch {}
   return gatherState();
 }
 
@@ -794,6 +977,159 @@ function actionOpen(url) {
   }
 }
 
+// ── inbox actions ──────────────────────────────────────────────────────────
+
+async function actionInboxRead(id) {
+  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  const r = await runGmail(["read", id]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "read failed", statusCode: 500 };
+  try { return { ok: true, message: JSON.parse(r.stdout) }; }
+  catch (e) { return { ok: false, error: "bad gmail.js output: " + e.message, statusCode: 500 }; }
+}
+
+async function actionInboxSummarize(id) {
+  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  const r = await runGmail(["summarize", id]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "summarize failed", statusCode: 500 };
+  return { ok: true, summary: r.stdout.trim() };
+}
+
+async function actionInboxMark(id, action) {
+  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
+  if (!["read", "archive", "trash"].includes(action)) return { ok: false, error: "invalid action", statusCode: 400 };
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  const r = await runGmail(["mark", id, action]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "mark failed", statusCode: 500 };
+  try { fs.unlinkSync(GMAIL_CACHE); } catch {}
+  return { ok: true };
+}
+
+async function actionInboxSearch(query, max) {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  const q = String(query || "").trim();
+  if (!q) return { ok: false, error: "q required", statusCode: 400 };
+  if (q.length > 256) return { ok: false, error: "q too long", statusCode: 400 };
+  const n = Math.max(1, Math.min(100, Number(max) || 25));
+  const r = await runGmail(["list", String(n), q]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "search failed", statusCode: 500 };
+  await ensureCalendarContext();
+  const items = decorateInboxItems(parseGmailListing(r.stdout));
+  return { ok: true, query: q, count: items.length, items };
+}
+
+let LINEAR_TEAM_CACHE = null;
+function linearGraphQL(query, variables) {
+  return new Promise((resolve, reject) => {
+    if (!cfg.linearApiKey) return reject(new Error("linearApiKey not configured"));
+    const body = JSON.stringify({ query, variables });
+    const req = https.request({
+      hostname: "api.linear.app",
+      path: "/graphql",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "authorization": cfg.linearApiKey,
+      },
+      timeout: 15000,
+    }, (r) => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (data.errors) return reject(new Error(data.errors[0]?.message || "GraphQL error"));
+          resolve(data.data);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(new Error("linear request timed out")); });
+    req.write(body); req.end();
+  });
+}
+
+async function resolveLinearTeamId() {
+  if (cfg.linearTeamId) return cfg.linearTeamId;
+  if (LINEAR_TEAM_CACHE) return LINEAR_TEAM_CACHE;
+  const data = await linearGraphQL(`{ viewer { teams(first: 1) { nodes { id key } } } }`);
+  const id = data?.viewer?.teams?.nodes?.[0]?.id;
+  if (!id) throw new Error("viewer has no Linear teams; set linearTeamId in config");
+  LINEAR_TEAM_CACHE = id;
+  return id;
+}
+
+async function actionInboxToLinear(id) {
+  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (!cfg.linearApiKey) return { ok: false, error: "linearApiKey not configured", statusCode: 400 };
+
+  const readResp = await runGmail(["read", id]);
+  if (!readResp.ok) return { ok: false, error: readResp.stderr.trim() || "read failed", statusCode: 500 };
+  let msg;
+  try { msg = JSON.parse(readResp.stdout); }
+  catch (e) { return { ok: false, error: "bad gmail.js output: " + e.message, statusCode: 500 }; }
+
+  const subject = (msg.subject || "(no subject)").trim();
+  const from    = (msg.from || "unknown").trim();
+  const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${id}`;
+  const bodyPlain = (msg.body_text || msg.snippet || "").trim();
+  const description = [
+    `From: ${from}`,
+    `Date: ${msg.date || ""}`,
+    `Gmail: ${gmailUrl}`,
+    "",
+    bodyPlain,
+  ].join("\n");
+
+  let teamId;
+  try { teamId = await resolveLinearTeamId(); }
+  catch (e) { return { ok: false, error: e.message, statusCode: 500 }; }
+
+  try {
+    const data = await linearGraphQL(
+      `mutation($input: IssueCreateInput!) {
+         issueCreate(input: $input) {
+           success
+           issue { id identifier url title }
+         }
+       }`,
+      { input: { teamId, title: subject, description } },
+    );
+    const issue = data?.issueCreate?.issue;
+    if (!data?.issueCreate?.success || !issue) return { ok: false, error: "linear rejected", statusCode: 500 };
+    return { ok: true, identifier: issue.identifier, url: issue.url, title: issue.title };
+  } catch (e) {
+    return { ok: false, error: e.message, statusCode: 500 };
+  }
+}
+
+async function actionInboxSend(body) {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (!body || typeof body !== "object") return { ok: false, error: "missing body", statusCode: 400 };
+  const to      = typeof body.to === "string" ? body.to.trim() : "";
+  const subject = typeof body.subject === "string" ? body.subject : "";
+  const text    = typeof body.body === "string" ? body.body : "";
+  if (!to)      return { ok: false, error: "to required", statusCode: 400 };
+  if (!subject) return { ok: false, error: "subject required", statusCode: 400 };
+  const reply_to_id = body.reply_to_id;
+  if (reply_to_id != null && !GMAIL_ID_RE.test(String(reply_to_id))) {
+    return { ok: false, error: "invalid reply_to_id", statusCode: 400 };
+  }
+  const payload = {
+    to, subject, body: text,
+    cc:  typeof body.cc  === "string" ? body.cc  : undefined,
+    bcc: typeof body.bcc === "string" ? body.bcc : undefined,
+    reply_to_id: reply_to_id || undefined,
+  };
+  const r = await runGmail(["send"], { stdin: JSON.stringify(payload) });
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "send failed", statusCode: 500 };
+  try { return { ok: true, ...JSON.parse(r.stdout) }; }
+  catch { return { ok: true }; }
+}
+
 // ── router ─────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -826,6 +1162,55 @@ const server = http.createServer(async (req, res) => {
       const m = req.method === "DELETE" && req.url.match(/^\/api\/config\/peers\/([^/?#]+)$/);
       if (m) {
         const r = actionRemovePeer(decodeURIComponent(m[1]));
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
+    }
+    if (req.method === "GET" && req.url === "/api/inbox/settings") {
+      return send(res, 200, {
+        ok: true,
+        snippets: cfg.gmailSnippets && typeof cfg.gmailSnippets === "object" ? cfg.gmailSnippets : {},
+        important_only: !!cfg.gmailImportantOnly,
+        team_emails: Array.isArray(cfg.teamEmails) ? cfg.teamEmails : [],
+        has_linear: !!cfg.linearApiKey,
+        has_summarizer: Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length > 0,
+      });
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/inbox/search")) {
+      const u = new URL(req.url, "http://127.0.0.1");
+      const r = await actionInboxSearch(u.searchParams.get("q"), u.searchParams.get("max"));
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    {
+      const m = req.method === "GET" && req.url.match(/^\/api\/inbox\/([^/?#]+)$/);
+      if (m) {
+        const r = await actionInboxRead(decodeURIComponent(m[1]));
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
+    }
+    {
+      const m = req.method === "POST" && req.url.match(/^\/api\/inbox\/([^/?#]+)\/summarize$/);
+      if (m) {
+        const r = await actionInboxSummarize(decodeURIComponent(m[1]));
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
+    }
+    {
+      const m = req.method === "POST" && req.url.match(/^\/api\/inbox\/([^/?#]+)\/mark$/);
+      if (m) {
+        const body = await readBody(req);
+        const r = await actionInboxMark(decodeURIComponent(m[1]), body && body.action);
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
+    }
+    if (req.method === "POST" && req.url === "/api/inbox/send") {
+      const body = await readBody(req);
+      const r = await actionInboxSend(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    {
+      const m = req.method === "POST" && req.url.match(/^\/api\/inbox\/([^/?#]+)\/to-linear$/);
+      if (m) {
+        const r = await actionInboxToLinear(decodeURIComponent(m[1]));
         return send(res, r.ok ? 200 : (r.statusCode || 400), r);
       }
     }

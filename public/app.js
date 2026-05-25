@@ -15,6 +15,7 @@ const COL_DEFAULTS = {
   sessions: 1.9,
   linear:   2.7,
   calendar: 1.6,
+  inbox:    2.4,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -364,6 +365,87 @@ function renderCalendar(cal) {
   }
 }
 
+function shortFrom(from) {
+  if (!from) return "?";
+  const m = from.match(/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/);
+  return m ? m[1].trim() : from.trim();
+}
+
+function fmtMeetingStart(start) {
+  if (!start) return "";
+  if (start.length === 10) return start.slice(5);
+  if (start.length >= 16)  return start.slice(5, 10) + " " + start.slice(11, 16);
+  return start;
+}
+
+let INBOX_SETTINGS = { snippets: {}, has_linear: false, has_summarizer: false };
+let INBOX_SEARCH_ACTIVE = false;
+let LAST_LIVE_INBOX = null;
+
+function renderInboxItem(m) {
+  const tags = [];
+  if (m.is_team)  tags.push(el("span", { class: "inbox-tag team" }, "team"));
+  if (m.meeting)  tags.push(el("span", { class: "inbox-tag meeting", title: m.meeting.summary || "" },
+    `· meeting ${fmtMeetingStart(m.meeting.start)}`));
+
+  const actions = [
+    el("button", { class: "btn btn-xs", "data-act": "open",      "data-id": m.id }, "open"),
+    el("button", { class: "btn btn-xs", "data-act": "summarize", "data-id": m.id }, "summary"),
+    el("button", { class: "btn btn-xs", "data-act": "reply",     "data-id": m.id }, "reply"),
+    el("button", { class: "btn btn-xs", "data-act": "archive",   "data-id": m.id }, "archive"),
+  ];
+  if (INBOX_SETTINGS.has_linear) {
+    actions.splice(3, 0, el("button", { class: "btn btn-xs", "data-act": "to-linear", "data-id": m.id, title: "create Linear issue" }, "linear"));
+  }
+
+  return el("li", {
+    class: "inbox-row" + (m.is_team ? " team" : ""),
+    title: m.from || "",
+  },
+    el("span", { class: "inbox-from" }, shortFrom(m.from)),
+    el("span", { class: "inbox-subject" },
+      m.subject || "(no subject)",
+      ...tags,
+    ),
+    el("span", { class: "inbox-actions" }, ...actions),
+  );
+}
+
+function renderInbox(inbox) {
+  const list = $("inbox-list");
+  list.replaceChildren();
+  if (!inbox || inbox.unconfigured) {
+    list.appendChild(el("li", { class: "empty" }, "gmail not configured — run: node server/bin/google-auth.js --gmail"));
+    $("inbox-meta").textContent = "";
+    return;
+  }
+  if (!inbox.authed) {
+    list.appendChild(el("li", { class: "empty" }, inbox.fetch_failed ? "fetch failed" : "not authed"));
+    $("inbox-meta").textContent = "";
+    return;
+  }
+  if (!inbox.items || !inbox.items.length) {
+    list.appendChild(el("li", { class: "empty" }, "inbox zero"));
+    $("inbox-meta").textContent = inbox.important_only ? "· 0 important unread" : "· 0 unread";
+    return;
+  }
+  $("inbox-meta").textContent = inbox.important_only
+    ? `· ${inbox.unread_count} important unread`
+    : `· ${inbox.unread_count} unread`;
+  for (const m of inbox.items) list.appendChild(renderInboxItem(m));
+}
+
+function renderSearchResults(payload) {
+  const list = $("inbox-list");
+  list.replaceChildren();
+  $("inbox-meta").textContent = `· search: ${payload.count} hit${payload.count === 1 ? "" : "s"}`;
+  if (!payload.items.length) {
+    list.appendChild(el("li", { class: "empty" }, "no matches"));
+    return;
+  }
+  for (const m of payload.items) list.appendChild(renderInboxItem(m));
+}
+
 function render(state) {
   renderClock(state.now);
   renderServices(state.services || {});
@@ -371,6 +453,8 @@ function render(state) {
   renderSessions(state);
   renderLinear(state.linear);
   renderCalendar(state.calendar);
+  LAST_LIVE_INBOX = state.inbox;
+  if (!INBOX_SEARCH_ACTIVE) renderInbox(state.inbox);
 }
 
 // ── resizable columns ─────────────────────────────────────────────────────
@@ -560,6 +644,164 @@ document.getElementById("remote-add")?.addEventListener("click", () => {
 document.getElementById("peer-add-form")?.addEventListener("submit", submitAddPeer);
 document.getElementById("peer-add-cancel")?.addEventListener("click", () => showPeerForm(false));
 
+// ── inbox + compose ───────────────────────────────────────────────────────
+
+function openCompose(prefill = {}) {
+  const modal = $("compose-modal");
+  const form = $("compose-form");
+  form.reset();
+  $("compose-error").hidden = true;
+  for (const k of ["to", "cc", "bcc", "subject", "body", "reply_to_id"]) {
+    if (prefill[k] != null) form.elements[k].value = prefill[k];
+  }
+  modal.hidden = false;
+  form.elements.to.focus();
+}
+
+function closeCompose() { $("compose-modal").hidden = true; }
+
+async function inboxAction(id, act) {
+  if (!id) return;
+  try {
+    if (act === "open") {
+      window.open(`https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(id)}`, "_blank", "noopener");
+    } else if (act === "summarize") {
+      toast("summarizing…");
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/summarize`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("summarize failed: " + (j.error || r.status), 4000);
+      toast(j.summary || "(no body)", 8000);
+    } else if (act === "archive") {
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/mark`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "archive" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("archive failed: " + (j.error || r.status), 4000);
+      toast("archived");
+      reload();
+    } else if (act === "reply") {
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("read failed: " + (j.error || r.status), 4000);
+      const m = j.message || {};
+      const subj = (m.subject || "").replace(/^(re:\s*)+/i, "");
+      openCompose({
+        to: m.from || "",
+        subject: subj ? `Re: ${subj}` : "Re:",
+        body: "",
+        reply_to_id: id,
+      });
+    } else if (act === "to-linear") {
+      toast("creating Linear issue…");
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/to-linear`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("linear failed: " + (j.error || r.status), 4000);
+      toast(`created ${j.identifier}`);
+      window.open(j.url, "_blank", "noopener");
+    }
+  } catch (e) {
+    toast("error: " + e.message, 4000);
+  }
+}
+
+$("inbox-list")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  inboxAction(btn.dataset.id, btn.dataset.act);
+});
+
+async function loadInboxSettings() {
+  try {
+    const r = await fetch("/api/inbox/settings");
+    const j = await r.json();
+    if (!j.ok) return;
+    INBOX_SETTINGS = j;
+    const sel = $("compose-snippet");
+    const row = $("compose-snippet-row");
+    if (sel && row) {
+      sel.replaceChildren(el("option", { value: "" }, "-- pick a canned reply --"));
+      const keys = Object.keys(j.snippets || {});
+      for (const k of keys) sel.appendChild(el("option", { value: k }, k));
+      row.hidden = keys.length === 0;
+    }
+  } catch {}
+}
+
+$("compose-snippet")?.addEventListener("change", (ev) => {
+  const key = ev.currentTarget.value;
+  if (!key) return;
+  const body = (INBOX_SETTINGS.snippets || {})[key];
+  if (body == null) return;
+  const ta = $("compose-form").elements.body;
+  ta.value = body;
+  ta.focus();
+  ev.currentTarget.value = "";
+});
+
+async function runInboxSearch(q) {
+  if (!q) {
+    INBOX_SEARCH_ACTIVE = false;
+    $("inbox-search-clear").hidden = true;
+    if (LAST_LIVE_INBOX) renderInbox(LAST_LIVE_INBOX);
+    return;
+  }
+  INBOX_SEARCH_ACTIVE = true;
+  $("inbox-search-clear").hidden = false;
+  try {
+    const r = await fetch(`/api/inbox/search?q=${encodeURIComponent(q)}`);
+    const j = await r.json();
+    if (!j.ok) return toast("search failed: " + (j.error || r.status), 4000);
+    renderSearchResults(j);
+  } catch (e) {
+    toast("search error: " + e.message, 4000);
+  }
+}
+
+$("inbox-search-form")?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  runInboxSearch($("inbox-search-input").value.trim());
+});
+$("inbox-search-clear")?.addEventListener("click", () => {
+  $("inbox-search-input").value = "";
+  runInboxSearch("");
+});
+
+$("inbox-compose")?.addEventListener("click", () => openCompose());
+$("compose-cancel")?.addEventListener("click", closeCompose);
+$("compose-modal")?.addEventListener("click", (ev) => {
+  if (ev.target.id === "compose-modal") closeCompose();
+});
+$("compose-form")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    to:      fd.get("to"),
+    cc:      fd.get("cc") || undefined,
+    bcc:     fd.get("bcc") || undefined,
+    subject: fd.get("subject"),
+    body:    fd.get("body") || "",
+    reply_to_id: fd.get("reply_to_id") || undefined,
+  };
+  const err = $("compose-error");
+  err.hidden = true;
+  try {
+    const r = await fetch("/api/inbox/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) { err.textContent = j.error || `error ${r.status}`; err.hidden = false; return; }
+    closeCompose();
+    toast("sent");
+  } catch (e) {
+    err.textContent = e.message;
+    err.hidden = false;
+  }
+});
+
 initResizableColumns();
 
 // ── main loop ─────────────────────────────────────────────────────────────
@@ -574,6 +816,7 @@ async function reload() {
   }
 }
 
+loadInboxSettings();
 reload();
 setInterval(reload, REFRESH_MS);
 
