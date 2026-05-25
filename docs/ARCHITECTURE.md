@@ -43,29 +43,43 @@
 
 ## Endpoints
 
-| Method | Path               | Purpose                              |
-|--------|--------------------|--------------------------------------|
-| GET    | `/api/health`      | `{ ok, version, platform }`           |
-| GET    | `/api/state`       | Aggregated snapshot                   |
-| POST   | `/api/refresh`     | Invalidate caches, return fresh state |
-| POST   | `/api/sync-linear` | Proxy to configured sync URL          |
-| POST   | `/api/open`        | `{ url }` → opens in default handler  |
-| GET    | `/`                | Browser fallback dashboard            |
+| Method | Path                              | Purpose                              |
+|--------|-----------------------------------|--------------------------------------|
+| GET    | `/api/health`                     | `{ ok, version, platform }`           |
+| GET    | `/api/state`                      | Aggregated snapshot                   |
+| POST   | `/api/refresh`                    | Invalidate caches, return fresh state |
+| POST   | `/api/sync-linear`                | Proxy to configured sync URL          |
+| POST   | `/api/open`                       | `{ url }` -> opens in default handler |
+| GET    | `/api/config/peers`               | list manual remote peers              |
+| POST   | `/api/config/peers`               | add manual peer                       |
+| DELETE | `/api/config/peers/:name`         | remove manual peer                    |
+| GET    | `/api/inbox/settings`             | snippets, team list, feature flags    |
+| GET    | `/api/inbox/search?q=&max=`       | Gmail query passthrough               |
+| GET    | `/api/inbox/:id`                  | full Gmail message JSON               |
+| POST   | `/api/inbox/:id/summarize`        | one-line summary (heuristic or LLM)   |
+| POST   | `/api/inbox/:id/mark`             | `{ action: read\|archive\|trash }`    |
+| POST   | `/api/inbox/:id/to-linear`        | create Linear issue from message      |
+| POST   | `/api/inbox/send`                 | `{ to, subject, body, cc?, bcc?, reply_to_id? }` |
+| GET    | `/`                               | Browser fallback dashboard            |
 
 ## Configuration
 
 All optional. See [server/config.js](../server/config.js).
 
 `~/.config/glance/config.json` keys: `port`, `host`, `inboxDir`,
-`calendarBin`, `linearSyncUrl`, `linearApiKey`, `services[]`,
+`calendarBin`, `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`,
+`gmailBlacklist`, `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`,
+`linearSyncUrl`, `linearApiKey`, `linearTeamId`, `services[]`,
 `presencePort`, `meEmails[]`.
 
 Each is also overridable via `GLANCE_*` env vars.
 
 For the Google Calendar integration (`calendarBin` pointing at
-`server/bin/gcal.js`), see [CALENDAR-SETUP.md](CALENDAR-SETUP.md). Each
-user creates their own Google Cloud OAuth client so the repo carries no
-shared credentials.
+`server/bin/gcal.js`), see [CALENDAR-SETUP.md](CALENDAR-SETUP.md). For
+Gmail (`gmailBin` pointing at `server/bin/gmail.js`), see
+[GMAIL-SETUP.md](GMAIL-SETUP.md). Both share one OAuth client and one
+on-disk token; each user creates their own Google Cloud OAuth client so
+the repo carries no shared credentials.
 
 ## Extension structure
 

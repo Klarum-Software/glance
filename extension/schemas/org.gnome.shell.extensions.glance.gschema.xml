@@ -27,7 +27,7 @@
       <description>Width of the dashboard dropdown as a percentage of the monitor width. 30-100.</description>
     </key>
     <key name="widget-layout" type="s">
-      <default>'[{"id":"remote","enabled":true,"weight":1},{"id":"sessions","enabled":true,"weight":1},{"id":"linear","enabled":true,"weight":2},{"id":"calendar","enabled":true,"weight":1}]'</default>
+      <default>'[{"id":"remote","enabled":true,"weight":1},{"id":"sessions","enabled":true,"weight":1},{"id":"linear","enabled":true,"weight":2},{"id":"calendar","enabled":true,"weight":1},{"id":"inbox","enabled":false,"weight":2}]'</default>
       <summary>Widget layout (JSON)</summary>
       <description>Ordered list of dashboard widgets. Each entry: { id, enabled, weight }. Unknown ids are dropped on load; newly registered widgets are appended disabled. Edit via the extension prefs or in-dashboard edit mode.</description>
     </key>

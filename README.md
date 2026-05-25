@@ -58,8 +58,9 @@ A dot appears in the top panel. Click it for the dashboard.
 ```
 
 Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
-`GLANCE_CALENDAR_BIN`, `GLANCE_LINEAR_SYNC`, `GLANCE_LINEAR_API_KEY`,
-`GLANCE_SERVICES`, `GLANCE_ME_EMAILS`). See `server/config.js`.
+`GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_GMAIL_MAX_UNREAD`,
+`GLANCE_LINEAR_SYNC`, `GLANCE_LINEAR_API_KEY`, `GLANCE_SERVICES`,
+`GLANCE_ME_EMAILS`). See `server/config.js`.
 
 ## Connecting your accounts
 
@@ -106,11 +107,22 @@ credentials). Full walkthrough:
 1. Create an OAuth 2.0 Client ID (Desktop app) at
    <https://console.cloud.google.com>, enable the Google Calendar API,
    add yourself as a test user.
-2. Run `node server/bin/gcal-auth.js`, paste the client id and secret,
-   complete the browser consent.
+2. Run `node server/bin/google-auth.js --calendar` (or with no flags to
+   also grant Gmail), paste the client id and secret, complete the browser
+   consent.
 3. Set `calendarBin` in `~/.config/glance/config.json` to the absolute
    path of `server/bin/gcal.js` (the auth helper prints it for you).
 4. Disable/enable the extension. Events appear within a refresh cycle.
+
+### Gmail
+
+Gmail shares the same OAuth client as Calendar (one consent, one token).
+Run `node server/bin/google-auth.js --gmail` (or no flags for both
+scopes), then set `gmailBin` in `~/.config/glance/config.json` to the
+absolute path of `server/bin/gmail.js`. The INBOX widget is registered
+disabled-by-default; enable it from prefs or the in-dashboard edit mode.
+Sender/subject blacklist patterns keep the column focused. Full guide:
+[docs/GMAIL-SETUP.md](docs/GMAIL-SETUP.md).
 
 ## What it shows
 
@@ -120,6 +132,7 @@ credentials). Full walkthrough:
 | SESSIONS | `ps`-derived `claude` process trees + RSS vs total RAM |
 | LINEAR   | `<inboxDir>/.linear-cache/*.json`         |
 | CALENDAR | `calendarBin` stdout (refreshed every 60s). For Google Calendar, see [docs/CALENDAR-SETUP.md](docs/CALENDAR-SETUP.md) |
+| INBOX    | `gmailBin` -- unread Gmail with blacklist filter (read/send/summarize/archive). See [docs/GMAIL-SETUP.md](docs/GMAIL-SETUP.md) |
 
 ## Architecture
 
