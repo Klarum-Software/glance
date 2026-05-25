@@ -4,9 +4,12 @@
 // on demand. Zero npm deps; MIME assembly is hand-rolled for send.
 //
 // Subcommands:
-//   list <max>                  unread inbox, TSV: id<TAB>ts_iso<TAB>from<TAB>subject
+//   list <max> [query]          messages matching query (default: is:unread in:inbox)
+//                               TSV: id<TAB>ts_iso<TAB>from<TAB>subject
 //   read <id>                   JSON to stdout (headers, snippet, plain+html body, labels)
-//   summarize <id>              heuristic one-paragraph summary of plain body (no LLM)
+//   summarize <id>              one-line summary. If GLANCE_GMAIL_SUMMARIZER_CMD is
+//                               set (JSON array), pipes the body to that command and
+//                               returns its stdout; otherwise heuristic (no LLM).
 //   send                        reads JSON from stdin {to, subject, body, cc?, bcc?, reply_to_id?}
 //   mark <id> <read|archive|trash>
 //
@@ -177,10 +180,11 @@ function buildRfc822({ to, cc, bcc, subject, body, inReplyTo, references }) {
 
 // ── subcommands ──────────────────────────────────────────────────────────
 
-async function cmdList(tok, max) {
+async function cmdList(tok, max, query) {
   const n = Math.max(1, Math.min(100, Number(max) || 20));
+  const q = (query && String(query).trim()) || "is:unread in:inbox";
   const listPath = `/gmail/v1/users/me/messages?` + new URLSearchParams({
-    q: "is:unread in:inbox",
+    q,
     maxResults: String(n),
   }).toString();
   const idsResp = await gmailRequest(tok, { path: listPath });
@@ -242,11 +246,60 @@ function summarize(body_text) {
   return joined.length > 240 ? joined.slice(0, 240).replace(/\s\S*$/, "") + "..." : joined;
 }
 
+// Spawn an external summarizer (e.g. `ssh mac-mini ollama run qwen2.5:7b`)
+// and pipe the email body to its stdin. Times out at 15s and falls back to
+// the heuristic on any failure so the dashboard never hangs on a flaky LLM.
+function runExternalSummarizer(cmd, args, prompt) {
+  return new Promise((resolve) => {
+    const { spawn } = require("child_process");
+    let settled = false;
+    const out = [], err = [];
+    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const done = (text) => {
+      if (settled) return;
+      settled = true;
+      try { child.kill("SIGTERM"); } catch {}
+      resolve(text);
+    };
+    const t = setTimeout(() => done(null), 15000);
+    child.stdout.on("data", c => out.push(c));
+    child.stderr.on("data", c => err.push(c));
+    child.on("close", (code) => {
+      clearTimeout(t);
+      if (settled) return;
+      if (code === 0) {
+        const text = Buffer.concat(out).toString("utf8").trim();
+        resolve(text || null);
+      } else {
+        resolve(null);
+      }
+      settled = true;
+    });
+    child.on("error", () => { clearTimeout(t); done(null); });
+    try { child.stdin.write(prompt); child.stdin.end(); }
+    catch { done(null); }
+  });
+}
+
 async function cmdSummarize(tok, id) {
   if (!id) throw new Error("usage: gmail.js summarize <id>");
   const m = await gmailRequest(tok, { path: `/gmail/v1/users/me/messages/${id}?format=full` });
   const bodies = extractBodies(m.payload);
   const text = bodies.text || (bodies.html ? bodies.html.replace(/<[^>]+>/g, " ") : "") || m.snippet || "";
+
+  const rawCmd = process.env.GLANCE_GMAIL_SUMMARIZER_CMD;
+  if (rawCmd) {
+    let argv;
+    try { argv = JSON.parse(rawCmd); } catch { argv = null; }
+    if (Array.isArray(argv) && argv.length) {
+      const prompt = `Summarize the following email in one sentence. Be terse and concrete; do not add preface or sign-off.\n\n---\n${text}\n---\n`;
+      const llm = await runExternalSummarizer(argv[0], argv.slice(1), prompt);
+      if (llm) {
+        process.stdout.write(llm.replace(/\s+/g, " ").trim() + "\n");
+        return;
+      }
+    }
+  }
   process.stdout.write(summarize(text) + "\n");
 }
 
@@ -324,7 +377,7 @@ async function cmdMark(tok, id, action) {
   tok = await ensureFresh(tok);
 
   switch (cmd) {
-    case "list":      return cmdList(tok, rest[0]);
+    case "list":      return cmdList(tok, rest[0], rest.slice(1).join(" "));
     case "read":      return cmdRead(tok, rest[0]);
     case "summarize": return cmdSummarize(tok, rest[0]);
     case "send":      return cmdSend(tok);

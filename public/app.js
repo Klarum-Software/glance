@@ -371,6 +371,46 @@ function shortFrom(from) {
   return m ? m[1].trim() : from.trim();
 }
 
+function fmtMeetingStart(start) {
+  if (!start) return "";
+  if (start.length === 10) return start.slice(5);
+  if (start.length >= 16)  return start.slice(5, 10) + " " + start.slice(11, 16);
+  return start;
+}
+
+let INBOX_SETTINGS = { snippets: {}, has_linear: false, has_summarizer: false };
+let INBOX_SEARCH_ACTIVE = false;
+let LAST_LIVE_INBOX = null;
+
+function renderInboxItem(m) {
+  const tags = [];
+  if (m.is_team)  tags.push(el("span", { class: "inbox-tag team" }, "team"));
+  if (m.meeting)  tags.push(el("span", { class: "inbox-tag meeting", title: m.meeting.summary || "" },
+    `· meeting ${fmtMeetingStart(m.meeting.start)}`));
+
+  const actions = [
+    el("button", { class: "btn btn-xs", "data-act": "open",      "data-id": m.id }, "open"),
+    el("button", { class: "btn btn-xs", "data-act": "summarize", "data-id": m.id }, "summary"),
+    el("button", { class: "btn btn-xs", "data-act": "reply",     "data-id": m.id }, "reply"),
+    el("button", { class: "btn btn-xs", "data-act": "archive",   "data-id": m.id }, "archive"),
+  ];
+  if (INBOX_SETTINGS.has_linear) {
+    actions.splice(3, 0, el("button", { class: "btn btn-xs", "data-act": "to-linear", "data-id": m.id, title: "create Linear issue" }, "linear"));
+  }
+
+  return el("li", {
+    class: "inbox-row" + (m.is_team ? " team" : ""),
+    title: m.from || "",
+  },
+    el("span", { class: "inbox-from" }, shortFrom(m.from)),
+    el("span", { class: "inbox-subject" },
+      m.subject || "(no subject)",
+      ...tags,
+    ),
+    el("span", { class: "inbox-actions" }, ...actions),
+  );
+}
+
 function renderInbox(inbox) {
   const list = $("inbox-list");
   list.replaceChildren();
@@ -386,23 +426,24 @@ function renderInbox(inbox) {
   }
   if (!inbox.items || !inbox.items.length) {
     list.appendChild(el("li", { class: "empty" }, "inbox zero"));
-    $("inbox-meta").textContent = "· 0 unread";
+    $("inbox-meta").textContent = inbox.important_only ? "· 0 important unread" : "· 0 unread";
     return;
   }
-  $("inbox-meta").textContent = `· ${inbox.unread_count} unread`;
-  for (const m of inbox.items) {
-    const row = el("li", { class: "inbox-row", title: m.from || "" },
-      el("span", { class: "inbox-from" }, shortFrom(m.from)),
-      el("span", { class: "inbox-subject" }, m.subject || "(no subject)"),
-      el("span", { class: "inbox-actions" },
-        el("button", { class: "btn btn-xs", "data-act": "open", "data-id": m.id }, "open"),
-        el("button", { class: "btn btn-xs", "data-act": "summarize", "data-id": m.id }, "summary"),
-        el("button", { class: "btn btn-xs", "data-act": "reply", "data-id": m.id }, "reply"),
-        el("button", { class: "btn btn-xs", "data-act": "archive", "data-id": m.id }, "archive"),
-      ),
-    );
-    list.appendChild(row);
+  $("inbox-meta").textContent = inbox.important_only
+    ? `· ${inbox.unread_count} important unread`
+    : `· ${inbox.unread_count} unread`;
+  for (const m of inbox.items) list.appendChild(renderInboxItem(m));
+}
+
+function renderSearchResults(payload) {
+  const list = $("inbox-list");
+  list.replaceChildren();
+  $("inbox-meta").textContent = `· search: ${payload.count} hit${payload.count === 1 ? "" : "s"}`;
+  if (!payload.items.length) {
+    list.appendChild(el("li", { class: "empty" }, "no matches"));
+    return;
   }
+  for (const m of payload.items) list.appendChild(renderInboxItem(m));
 }
 
 function render(state) {
@@ -412,7 +453,8 @@ function render(state) {
   renderSessions(state);
   renderLinear(state.linear);
   renderCalendar(state.calendar);
-  renderInbox(state.inbox);
+  LAST_LIVE_INBOX = state.inbox;
+  if (!INBOX_SEARCH_ACTIVE) renderInbox(state.inbox);
 }
 
 // ── resizable columns ─────────────────────────────────────────────────────
@@ -651,6 +693,13 @@ async function inboxAction(id, act) {
         body: "",
         reply_to_id: id,
       });
+    } else if (act === "to-linear") {
+      toast("creating Linear issue…");
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/to-linear`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("linear failed: " + (j.error || r.status), 4000);
+      toast(`created ${j.identifier}`);
+      window.open(j.url, "_blank", "noopener");
     }
   } catch (e) {
     toast("error: " + e.message, 4000);
@@ -661,6 +710,62 @@ $("inbox-list")?.addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-act]");
   if (!btn) return;
   inboxAction(btn.dataset.id, btn.dataset.act);
+});
+
+async function loadInboxSettings() {
+  try {
+    const r = await fetch("/api/inbox/settings");
+    const j = await r.json();
+    if (!j.ok) return;
+    INBOX_SETTINGS = j;
+    const sel = $("compose-snippet");
+    const row = $("compose-snippet-row");
+    if (sel && row) {
+      sel.replaceChildren(el("option", { value: "" }, "-- pick a canned reply --"));
+      const keys = Object.keys(j.snippets || {});
+      for (const k of keys) sel.appendChild(el("option", { value: k }, k));
+      row.hidden = keys.length === 0;
+    }
+  } catch {}
+}
+
+$("compose-snippet")?.addEventListener("change", (ev) => {
+  const key = ev.currentTarget.value;
+  if (!key) return;
+  const body = (INBOX_SETTINGS.snippets || {})[key];
+  if (body == null) return;
+  const ta = $("compose-form").elements.body;
+  ta.value = body;
+  ta.focus();
+  ev.currentTarget.value = "";
+});
+
+async function runInboxSearch(q) {
+  if (!q) {
+    INBOX_SEARCH_ACTIVE = false;
+    $("inbox-search-clear").hidden = true;
+    if (LAST_LIVE_INBOX) renderInbox(LAST_LIVE_INBOX);
+    return;
+  }
+  INBOX_SEARCH_ACTIVE = true;
+  $("inbox-search-clear").hidden = false;
+  try {
+    const r = await fetch(`/api/inbox/search?q=${encodeURIComponent(q)}`);
+    const j = await r.json();
+    if (!j.ok) return toast("search failed: " + (j.error || r.status), 4000);
+    renderSearchResults(j);
+  } catch (e) {
+    toast("search error: " + e.message, 4000);
+  }
+}
+
+$("inbox-search-form")?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  runInboxSearch($("inbox-search-input").value.trim());
+});
+$("inbox-search-clear")?.addEventListener("click", () => {
+  $("inbox-search-input").value = "";
+  runInboxSearch("");
 });
 
 $("inbox-compose")?.addEventListener("click", () => openCompose());
@@ -711,6 +816,7 @@ async function reload() {
   }
 }
 
+loadInboxSettings();
 reload();
 setInterval(reload, REFRESH_MS);
 

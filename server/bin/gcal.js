@@ -9,7 +9,9 @@
 // lines with newlines in the summary are normalized to single spaces
 // so the parsing regex in server.js doesn't break across events.
 //
-// Usage: node server/bin/gcal.js list <days>
+// Usage:
+//   node server/bin/gcal.js list <days>
+//   node server/bin/gcal.js attendees <days>     # TSV: <start_iso>\t<email>\t<summary>
 
 const fs    = require("fs");
 const os    = require("os");
@@ -111,8 +113,8 @@ function listEvents(tok, days) {
 
 (async () => {
   const [cmd, daysArg] = process.argv.slice(2);
-  if (cmd !== "list") {
-    console.error("usage: gcal.js list <days>");
+  if (cmd !== "list" && cmd !== "attendees") {
+    console.error("usage: gcal.js list <days> | attendees <days>");
     process.exit(2);
   }
   const days = Math.max(1, Math.min(30, Number(daysArg) || 7));
@@ -121,17 +123,35 @@ function listEvents(tok, days) {
   try {
     tok = loadToken();
   } catch (e) {
-    console.error("No token file. Run: node server/bin/gcal-auth.js");
+    console.error("No token file. Run: node server/bin/google-auth.js --calendar");
     process.exit(1);
   }
 
   tok = await ensureFresh(tok);
   const events = await listEvents(tok, days);
 
+  if (cmd === "list") {
+    for (const ev of events) {
+      const start = ev.start && (ev.start.dateTime || ev.start.date);
+      if (!start || !ev.id) continue;
+      const summary = (ev.summary || "(untitled)").replace(/\s+/g, " ").trim();
+      console.log(`${start} ${summary} [${ev.id}]`);
+    }
+    return;
+  }
+
   for (const ev of events) {
     const start = ev.start && (ev.start.dateTime || ev.start.date);
-    if (!start || !ev.id) continue;
+    if (!start) continue;
     const summary = (ev.summary || "(untitled)").replace(/\s+/g, " ").trim();
-    console.log(`${start} ${summary} [${ev.id}]`);
+    const attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
+    const seen = new Set();
+    if (ev.organizer && ev.organizer.email) attendees.push({ email: ev.organizer.email });
+    for (const a of attendees) {
+      const email = (a.email || "").toLowerCase().trim();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      process.stdout.write(`${start}\t${email}\t${summary}\n`);
+    }
   }
 })().catch((e) => { console.error("Error:", e.message); process.exit(1); });

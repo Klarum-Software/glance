@@ -244,7 +244,10 @@ function renderInbox(state, opts) {
         return { meta: "· 0 unread", children };
     }
     for (const m of inbox.items) {
-        const row = new St.BoxLayout({ vertical: false, style_class: "glance-inbox-row" });
+        const row = new St.BoxLayout({
+            vertical: false,
+            style_class: "glance-inbox-row" + (m.is_team ? " team" : ""),
+        });
         const from = new St.Label({
             text: shortFrom(m.from),
             style_class: "glance-inbox-from",
@@ -252,9 +255,11 @@ function renderInbox(state, opts) {
         });
         from.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         row.add_child(from);
+        const subjText = (m.subject || "(no subject)") +
+            (m.meeting ? `   · meeting ${fmt.fmtMeetingShort(m.meeting.start)}` : "");
         const subj = new St.Label({
-            text: m.subject || "(no subject)",
-            style_class: "glance-inbox-subject",
+            text: subjText,
+            style_class: "glance-inbox-subject" + (m.meeting ? " has-meeting" : ""),
             y_align: Clutter.ActorAlign.CENTER,
             x_expand: true,
         });
@@ -264,7 +269,8 @@ function renderInbox(state, opts) {
             if (opts.onOpenUrl) opts.onOpenUrl(`https://mail.google.com/mail/u/0/#inbox/${m.id}`);
         }));
     }
-    return { meta: `· ${inbox.unread_count} unread`, children };
+    const metaSuffix = inbox.important_only ? " important unread" : " unread";
+    return { meta: `· ${inbox.unread_count}${metaSuffix}`, children };
 }
 
 // ── built-in registrations ──────────────────────────────────────────────

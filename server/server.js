@@ -413,8 +413,12 @@ function filterByBlacklist(rows, bl) {
 function runGmail(args, opts = {}) {
   return new Promise((resolve) => {
     if (!cfg.gmailBin) return resolve({ ok: false, code: -1, stdout: "", stderr: "gmailBin not configured" });
+    const env = { ...process.env };
+    if (Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length) {
+      env.GLANCE_GMAIL_SUMMARIZER_CMD = JSON.stringify(cfg.gmailSummarizerCmd);
+    }
     const out = [], err = [];
-    const child = spawn("node", [cfg.gmailBin, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("node", [cfg.gmailBin, ...args], { stdio: ["pipe", "pipe", "pipe"], env });
     child.stdout.on("data", c => out.push(c));
     child.stderr.on("data", c => err.push(c));
     child.on("close", code => resolve({
@@ -433,15 +437,79 @@ function runGmail(args, opts = {}) {
   });
 }
 
+function defaultInboxQuery() {
+  return cfg.gmailImportantOnly
+    ? "is:unread in:inbox is:important"
+    : "is:unread in:inbox";
+}
+
 function refreshGmailCache() {
   return new Promise(async (resolve) => {
-    const r = await runGmail(["list", String(cfg.gmailMaxUnread || 20)]);
+    const r = await runGmail(["list", String(cfg.gmailMaxUnread || 20), defaultInboxQuery()]);
     try {
       if (r.ok) fs.writeFileSync(GMAIL_CACHE, r.stdout);
       else fs.writeFileSync(GMAIL_CACHE, "__FETCH_FAILED__\n" + (r.stderr || ""));
     } catch {}
     resolve(r);
   });
+}
+
+// Strip the address out of an RFC822 From header like '"Jane" <jane@x.com>'.
+function extractEmail(headerValue) {
+  if (!headerValue) return null;
+  const angle = headerValue.match(/<([^>]+)>/);
+  const raw = (angle ? angle[1] : headerValue).trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+$/.test(raw) ? raw : null;
+}
+
+// Email -> next-upcoming-event map, refreshed on the same 60s cadence as the
+// calendar list cache. Empty when calendarBin is unset or the attendees fetch
+// fails; absence is silently treated as "no context to attach."
+const CAL_CONTEXT = { map: new Map(), fetchedAt: 0 };
+
+function fetchCalendarContext() {
+  return new Promise((resolve) => {
+    if (!cfg.calendarBin) { CAL_CONTEXT.map = new Map(); CAL_CONTEXT.fetchedAt = Date.now(); return resolve(); }
+    const out = [];
+    const child = spawn("node", [cfg.calendarBin, "attendees", "7"], { stdio: ["ignore", "pipe", "ignore"] });
+    child.stdout.on("data", c => out.push(c));
+    child.on("close", () => {
+      const map = new Map();
+      const text = Buffer.concat(out).toString("utf8");
+      for (const line of text.split("\n")) {
+        const parts = line.split("\t");
+        if (parts.length < 3) continue;
+        const [start, email, summary] = parts;
+        if (!email || map.has(email)) continue;
+        map.set(email, { start, summary });
+      }
+      CAL_CONTEXT.map = map;
+      CAL_CONTEXT.fetchedAt = Date.now();
+      resolve();
+    });
+    child.on("error", () => { CAL_CONTEXT.fetchedAt = Date.now(); resolve(); });
+  });
+}
+
+async function ensureCalendarContext() {
+  if (Date.now() - CAL_CONTEXT.fetchedAt < 60_000) return;
+  await fetchCalendarContext();
+}
+
+function decorateInboxItems(items) {
+  const teamSet = new Set((cfg.teamEmails || []).map(e => String(e).toLowerCase()));
+  for (const m of items) {
+    const email = extractEmail(m.from);
+    m.from_email = email;
+    m.is_team = !!(email && teamSet.has(email));
+    const ctx = email ? CAL_CONTEXT.map.get(email) : null;
+    m.meeting = ctx || null;
+  }
+  items.sort((a, b) => {
+    if (a.is_team !== b.is_team) return a.is_team ? -1 : 1;
+    return (b.ts || "").localeCompare(a.ts || "");
+  });
+  return items;
 }
 
 async function gatherInbox() {
@@ -463,11 +531,13 @@ async function gatherInbox() {
   if (!text || text.startsWith("__FETCH_FAILED__")) {
     return { authed: false, fetch_failed: text.startsWith("__FETCH_FAILED__"), unread_count: 0, items: [] };
   }
+  await ensureCalendarContext();
   const bl = buildBlacklist(cfg.gmailBlacklist);
-  const filtered = filterByBlacklist(parseGmailListing(text), bl);
+  const filtered = decorateInboxItems(filterByBlacklist(parseGmailListing(text), bl));
   return {
     authed: true,
     fetch_failed: false,
+    important_only: !!cfg.gmailImportantOnly,
     unread_count: filtered.length,
     items: filtered,
   };
@@ -775,6 +845,106 @@ async function actionInboxMark(id, action) {
   return { ok: true };
 }
 
+async function actionInboxSearch(query, max) {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  const q = String(query || "").trim();
+  if (!q) return { ok: false, error: "q required", statusCode: 400 };
+  if (q.length > 256) return { ok: false, error: "q too long", statusCode: 400 };
+  const n = Math.max(1, Math.min(100, Number(max) || 25));
+  const r = await runGmail(["list", String(n), q]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "search failed", statusCode: 500 };
+  await ensureCalendarContext();
+  const items = decorateInboxItems(parseGmailListing(r.stdout));
+  return { ok: true, query: q, count: items.length, items };
+}
+
+let LINEAR_TEAM_CACHE = null;
+function linearGraphQL(query, variables) {
+  return new Promise((resolve, reject) => {
+    if (!cfg.linearApiKey) return reject(new Error("linearApiKey not configured"));
+    const body = JSON.stringify({ query, variables });
+    const req = https.request({
+      hostname: "api.linear.app",
+      path: "/graphql",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "authorization": cfg.linearApiKey,
+      },
+      timeout: 15000,
+    }, (r) => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (data.errors) return reject(new Error(data.errors[0]?.message || "GraphQL error"));
+          resolve(data.data);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(new Error("linear request timed out")); });
+    req.write(body); req.end();
+  });
+}
+
+async function resolveLinearTeamId() {
+  if (cfg.linearTeamId) return cfg.linearTeamId;
+  if (LINEAR_TEAM_CACHE) return LINEAR_TEAM_CACHE;
+  const data = await linearGraphQL(`{ viewer { teams(first: 1) { nodes { id key } } } }`);
+  const id = data?.viewer?.teams?.nodes?.[0]?.id;
+  if (!id) throw new Error("viewer has no Linear teams; set linearTeamId in config");
+  LINEAR_TEAM_CACHE = id;
+  return id;
+}
+
+async function actionInboxToLinear(id) {
+  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (!cfg.linearApiKey) return { ok: false, error: "linearApiKey not configured", statusCode: 400 };
+
+  const readResp = await runGmail(["read", id]);
+  if (!readResp.ok) return { ok: false, error: readResp.stderr.trim() || "read failed", statusCode: 500 };
+  let msg;
+  try { msg = JSON.parse(readResp.stdout); }
+  catch (e) { return { ok: false, error: "bad gmail.js output: " + e.message, statusCode: 500 }; }
+
+  const subject = (msg.subject || "(no subject)").trim();
+  const from    = (msg.from || "unknown").trim();
+  const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${id}`;
+  const bodyPlain = (msg.body_text || msg.snippet || "").trim();
+  const description = [
+    `From: ${from}`,
+    `Date: ${msg.date || ""}`,
+    `Gmail: ${gmailUrl}`,
+    "",
+    bodyPlain,
+  ].join("\n");
+
+  let teamId;
+  try { teamId = await resolveLinearTeamId(); }
+  catch (e) { return { ok: false, error: e.message, statusCode: 500 }; }
+
+  try {
+    const data = await linearGraphQL(
+      `mutation($input: IssueCreateInput!) {
+         issueCreate(input: $input) {
+           success
+           issue { id identifier url title }
+         }
+       }`,
+      { input: { teamId, title: subject, description } },
+    );
+    const issue = data?.issueCreate?.issue;
+    if (!data?.issueCreate?.success || !issue) return { ok: false, error: "linear rejected", statusCode: 500 };
+    return { ok: true, identifier: issue.identifier, url: issue.url, title: issue.title };
+  } catch (e) {
+    return { ok: false, error: e.message, statusCode: 500 };
+  }
+}
+
 async function actionInboxSend(body) {
   if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
   if (!body || typeof body !== "object") return { ok: false, error: "missing body", statusCode: 400 };
@@ -834,6 +1004,21 @@ const server = http.createServer(async (req, res) => {
         return send(res, r.ok ? 200 : (r.statusCode || 400), r);
       }
     }
+    if (req.method === "GET" && req.url === "/api/inbox/settings") {
+      return send(res, 200, {
+        ok: true,
+        snippets: cfg.gmailSnippets && typeof cfg.gmailSnippets === "object" ? cfg.gmailSnippets : {},
+        important_only: !!cfg.gmailImportantOnly,
+        team_emails: Array.isArray(cfg.teamEmails) ? cfg.teamEmails : [],
+        has_linear: !!cfg.linearApiKey,
+        has_summarizer: Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length > 0,
+      });
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/inbox/search")) {
+      const u = new URL(req.url, "http://127.0.0.1");
+      const r = await actionInboxSearch(u.searchParams.get("q"), u.searchParams.get("max"));
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
     {
       const m = req.method === "GET" && req.url.match(/^\/api\/inbox\/([^/?#]+)$/);
       if (m) {
@@ -860,6 +1045,13 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const r = await actionInboxSend(body);
       return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    {
+      const m = req.method === "POST" && req.url.match(/^\/api\/inbox\/([^/?#]+)\/to-linear$/);
+      if (m) {
+        const r = await actionInboxToLinear(decodeURIComponent(m[1]));
+        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+      }
     }
     if (req.method === "GET") return serveStatic(req, res);
     send(res, 405, { error: "method not allowed" });

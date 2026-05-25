@@ -754,3 +754,59 @@ body.col-resizing * { cursor: col-resize !important; }
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ── inbox extras (search, tags, team) ────────────────────────────────── */
+
+.inbox-search {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 6px;
+}
+.inbox-search input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+.inbox-search input:focus { border-color: var(--accent); }
+
+.inbox-row.team {
+  border-left: 2px solid var(--inbox);
+  padding-left: 4px;
+}
+.inbox-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.inbox-tag.team {
+  background: rgba(192, 132, 252, 0.15);
+  color: var(--inbox);
+}
+.inbox-tag.meeting {
+  color: var(--calendar);
+  background: transparent;
+  padding: 0 2px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+
+.compose-snippet select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+}

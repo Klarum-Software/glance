@@ -47,13 +47,42 @@ Add to `~/.config/glance/config.json`:
 {
   "gmailBin":     "/absolute/path/to/glance/server/bin/gmail.js",
   "gmailMaxUnread": 20,
+  "gmailImportantOnly": false,
   "gmailBlacklist": {
     "fromPatterns":    ["notifications@github.com", "*@*.linkedin.com"],
     "subjectPatterns": ["[CRON]*"],
     "labelExcludes":   ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"]
-  }
+  },
+  "gmailSnippets": {
+    "acknowledge":     "Got it -- I'll get back to you shortly.",
+    "decline politely": "Thanks for the offer, but I can't take this on right now.",
+    "needs more info":  "Could you share a bit more detail on this? Specifically: ..."
+  },
+  "teamEmails":   ["alice@example.com", "bob@example.com"],
+  "linearTeamId": null,
+  "gmailSummarizerCmd": ["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"]
 }
 ```
+
+### Optional features
+
+- `gmailImportantOnly`: appends `is:important` to the inbox query so the
+  column only shows mail Gmail's importance signal flagged. Cuts noise even
+  without a blacklist.
+- `gmailSnippets`: key/value map of canned replies. The browser compose
+  modal shows a dropdown that fills the body when picked.
+- `teamEmails`: senders in this list get a colored left-bar and float to
+  the top of the INBOX column.
+- `linearTeamId`: explicit Linear team ID used by the "linear" button on
+  each inbox row. Unset means the server fetches your viewer's first team
+  on first use and caches it.
+- `gmailSummarizerCmd`: argv array for an external summarizer. When set,
+  `gmail.js summarize` pipes the email body to its stdin and returns the
+  command's stdout. 15s timeout; falls back to the heuristic on any
+  failure. Example values:
+  - `["ollama", "run", "qwen2.5:7b"]` (local Ollama)
+  - `["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"]` (remote Ollama)
+  - `["claude", "-p", "Summarize this email in one sentence."]` (Claude Code CLI)
 
 Restart the backend. The INBOX column populates within ~60s (the cache TTL).
 
@@ -90,11 +119,14 @@ echo '{"to":"a@b.com","subject":"hi","body":"hi"}' | node server/bin/gmail.js se
 
 ## Endpoints (browser dashboard / API)
 
-| Method | Path                                | Body                                                      |
+| Method | Path                                | Body / Query                                              |
 |--------|-------------------------------------|-----------------------------------------------------------|
+| GET    | `/api/inbox/settings`               | -- (snippets, has_linear, has_summarizer, team_emails, ...) |
+| GET    | `/api/inbox/search?q=&max=`         | -- (any Gmail query string)                               |
 | GET    | `/api/inbox/<id>`                   | -- (returns full message)                                 |
 | POST   | `/api/inbox/<id>/summarize`         | -- (returns one-line summary)                             |
 | POST   | `/api/inbox/<id>/mark`              | `{ "action": "read" \| "archive" \| "trash" }`            |
+| POST   | `/api/inbox/<id>/to-linear`         | -- (creates Linear issue, returns identifier + url)       |
 | POST   | `/api/inbox/send`                   | `{ to, subject, body, cc?, bcc?, reply_to_id? }`          |
 
 `/api/state` now includes an `inbox` block: `{ authed, fetch_failed, unread_count, items }`.

@@ -93,6 +93,10 @@
         <span class="col-meta" id="inbox-meta"></span>
         <button class="col-action" id="inbox-compose" title="compose new email">+</button>
       </h2>
+      <form class="inbox-search" id="inbox-search-form" autocomplete="off">
+        <input type="search" id="inbox-search-input" placeholder='search (Gmail query, e.g. from:alice has:attachment)'>
+        <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
+      </form>
       <ul class="list" id="inbox-list"></ul>
     </section>
   </main>
@@ -105,6 +109,10 @@
         <label>Cc <input type="text" name="cc" autocomplete="off"></label>
         <label>Bcc <input type="text" name="bcc" autocomplete="off"></label>
         <label>Subject <input type="text" name="subject" required autocomplete="off"></label>
+        <label class="compose-snippet" id="compose-snippet-row" hidden>
+          Snippet
+          <select id="compose-snippet"><option value="">-- pick a canned reply --</option></select>
+        </label>
         <label class="compose-body">Body <textarea name="body" rows="10"></textarea></label>
         <input type="hidden" name="reply_to_id">
         <div class="compose-error" id="compose-error" hidden></div>

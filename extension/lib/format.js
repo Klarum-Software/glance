@@ -33,6 +33,13 @@ export function fmtClock(iso) {
   return `${hh}:${mm}:${ss}`;
 }
 
+export function fmtMeetingShort(start) {
+  if (!start) return "";
+  if (start.length === 10) return start.slice(5);
+  if (start.length >= 16)  return start.slice(5, 10) + " " + start.slice(11, 16);
+  return start;
+}
+
 export function today()    { return new Date().toISOString().slice(0, 10); }
 export function tomorrow() {
   const d = new Date(); d.setDate(d.getDate() + 1);

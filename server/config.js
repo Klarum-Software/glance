@@ -17,6 +17,8 @@ const DEFAULTS = {
   gmailBin: null,
   // unread inbox cap fetched per /api/state cycle
   gmailMaxUnread: 20,
+  // when true, the INBOX column shows only is:important unread mail
+  gmailImportantOnly: false,
   // filter noisy senders/subjects out of the inbox column. Patterns use "*"
   // wildcards (case-insensitive). labelExcludes matches Gmail label IDs;
   // CATEGORY_PROMOTIONS and CATEGORY_SOCIAL are excluded by default so the
@@ -26,6 +28,20 @@ const DEFAULTS = {
     subjectPatterns: [],
     labelExcludes:   ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"],
   },
+  // canned replies surfaced in the compose modal. Key is the dropdown label,
+  // value is the body that replaces the textarea contents when selected.
+  gmailSnippets: {},
+  // emails whose senders should be highlighted + sorted to the top of the
+  // INBOX column (e.g. teammates, manager, on-call rotation).
+  teamEmails: [],
+  // external summarizer command (argv array). When set, gmail.js summarize
+  // pipes the email body to this command's stdin and uses its stdout instead
+  // of the heuristic. Example: ["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"].
+  // 15s timeout, falls back to heuristic on any failure.
+  gmailSummarizerCmd: null,
+  // optional Linear team ID used when creating issues from inbox messages.
+  // If unset, the server fetches the viewer's first team on first use.
+  linearTeamId: null,
   // optional: inbox-ui /api/linear/sync endpoint
   linearSyncUrl: null,
   // optional: Linear API key for built-in sync (alternative to linearSyncUrl)
@@ -54,6 +70,9 @@ function load() {
   if (process.env.GLANCE_CALENDAR_BIN) env.calendarBin = process.env.GLANCE_CALENDAR_BIN;
   if (process.env.GLANCE_GMAIL_BIN)    env.gmailBin    = process.env.GLANCE_GMAIL_BIN;
   if (process.env.GLANCE_GMAIL_MAX_UNREAD) env.gmailMaxUnread = Number(process.env.GLANCE_GMAIL_MAX_UNREAD);
+  if (process.env.GLANCE_GMAIL_IMPORTANT_ONLY) env.gmailImportantOnly = /^(1|true|yes)$/i.test(process.env.GLANCE_GMAIL_IMPORTANT_ONLY);
+  if (process.env.GLANCE_TEAM_EMAILS)  env.teamEmails  = process.env.GLANCE_TEAM_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (process.env.GLANCE_LINEAR_TEAM_ID) env.linearTeamId = process.env.GLANCE_LINEAR_TEAM_ID;
   if (process.env.GLANCE_LINEAR_SYNC)     env.linearSyncUrl = process.env.GLANCE_LINEAR_SYNC;
   if (process.env.GLANCE_LINEAR_API_KEY) env.linearApiKey  = process.env.GLANCE_LINEAR_API_KEY;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);

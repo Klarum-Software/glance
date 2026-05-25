@@ -53,9 +53,12 @@
 | GET    | `/api/config/peers`               | list manual remote peers              |
 | POST   | `/api/config/peers`               | add manual peer                       |
 | DELETE | `/api/config/peers/:name`         | remove manual peer                    |
+| GET    | `/api/inbox/settings`             | snippets, team list, feature flags    |
+| GET    | `/api/inbox/search?q=&max=`       | Gmail query passthrough               |
 | GET    | `/api/inbox/:id`                  | full Gmail message JSON               |
-| POST   | `/api/inbox/:id/summarize`        | heuristic one-line summary            |
+| POST   | `/api/inbox/:id/summarize`        | one-line summary (heuristic or LLM)   |
 | POST   | `/api/inbox/:id/mark`             | `{ action: read\|archive\|trash }`    |
+| POST   | `/api/inbox/:id/to-linear`        | create Linear issue from message      |
 | POST   | `/api/inbox/send`                 | `{ to, subject, body, cc?, bcc?, reply_to_id? }` |
 | GET    | `/`                               | Browser fallback dashboard            |
 
@@ -64,9 +67,10 @@
 All optional. See [server/config.js](../server/config.js).
 
 `~/.config/glance/config.json` keys: `port`, `host`, `inboxDir`,
-`calendarBin`, `gmailBin`, `gmailMaxUnread`, `gmailBlacklist`,
-`linearSyncUrl`, `linearApiKey`, `services[]`, `presencePort`,
-`meEmails[]`.
+`calendarBin`, `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`,
+`gmailBlacklist`, `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`,
+`linearSyncUrl`, `linearApiKey`, `linearTeamId`, `services[]`,
+`presencePort`, `meEmails[]`.
 
 Each is also overridable via `GLANCE_*` env vars.
 
