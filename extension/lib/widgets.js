@@ -219,12 +219,61 @@ function renderCalendar(state) {
     return { meta: `· ${cal.events.length} upcoming`, children };
 }
 
+// ── INBOX ───────────────────────────────────────────────────────────────
+
+function shortFrom(from) {
+    if (!from) return "?";
+    const m = from.match(/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/);
+    if (m) return m[1].trim();
+    return from.trim();
+}
+
+function renderInbox(state, opts) {
+    const inbox = state.inbox || { items: [] };
+    const children = [];
+    if (inbox.unconfigured) {
+        children.push(emptyRow("gmail not configured"));
+        return { meta: "", children };
+    }
+    if (!inbox.authed) {
+        children.push(emptyRow(inbox.fetch_failed ? "fetch failed" : "not authed"));
+        return { meta: "", children };
+    }
+    if (!inbox.items || !inbox.items.length) {
+        children.push(emptyRow("inbox zero"));
+        return { meta: "· 0 unread", children };
+    }
+    for (const m of inbox.items) {
+        const row = new St.BoxLayout({ vertical: false, style_class: "glance-inbox-row" });
+        const from = new St.Label({
+            text: shortFrom(m.from),
+            style_class: "glance-inbox-from",
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        from.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        row.add_child(from);
+        const subj = new St.Label({
+            text: m.subject || "(no subject)",
+            style_class: "glance-inbox-subject",
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+        });
+        subj.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        row.add_child(subj);
+        children.push(clickableRow(row, () => {
+            if (opts.onOpenUrl) opts.onOpenUrl(`https://mail.google.com/mail/u/0/#inbox/${m.id}`);
+        }));
+    }
+    return { meta: `· ${inbox.unread_count} unread`, children };
+}
+
 // ── built-in registrations ──────────────────────────────────────────────
 
 registerWidget({ id: "remote",   title: "REMOTE",   tagClass: "remote",   defaultWeight: 1, builtIn: true, render: renderRemote   });
 registerWidget({ id: "sessions", title: "SESSIONS", tagClass: "sessions", defaultWeight: 1, builtIn: true, render: renderSessions });
 registerWidget({ id: "linear",   title: "LINEAR",   tagClass: "linear",   defaultWeight: 2, builtIn: true, render: renderLinear   });
 registerWidget({ id: "calendar", title: "CALENDAR", tagClass: "calendar", defaultWeight: 1, builtIn: true, render: renderCalendar });
+registerWidget({ id: "inbox",    title: "INBOX",    tagClass: "inbox",    defaultWeight: 2, builtIn: true, render: renderInbox    });
 
 // Parse a JSON layout string, drop entries pointing at unknown widgets, and
 // append any registered widgets the saved layout doesn't mention (so a newly

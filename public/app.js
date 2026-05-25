@@ -15,6 +15,7 @@ const COL_DEFAULTS = {
   sessions: 1.9,
   linear:   2.7,
   calendar: 1.6,
+  inbox:    2.4,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -364,6 +365,46 @@ function renderCalendar(cal) {
   }
 }
 
+function shortFrom(from) {
+  if (!from) return "?";
+  const m = from.match(/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/);
+  return m ? m[1].trim() : from.trim();
+}
+
+function renderInbox(inbox) {
+  const list = $("inbox-list");
+  list.replaceChildren();
+  if (!inbox || inbox.unconfigured) {
+    list.appendChild(el("li", { class: "empty" }, "gmail not configured — run: node server/bin/google-auth.js --gmail"));
+    $("inbox-meta").textContent = "";
+    return;
+  }
+  if (!inbox.authed) {
+    list.appendChild(el("li", { class: "empty" }, inbox.fetch_failed ? "fetch failed" : "not authed"));
+    $("inbox-meta").textContent = "";
+    return;
+  }
+  if (!inbox.items || !inbox.items.length) {
+    list.appendChild(el("li", { class: "empty" }, "inbox zero"));
+    $("inbox-meta").textContent = "· 0 unread";
+    return;
+  }
+  $("inbox-meta").textContent = `· ${inbox.unread_count} unread`;
+  for (const m of inbox.items) {
+    const row = el("li", { class: "inbox-row", title: m.from || "" },
+      el("span", { class: "inbox-from" }, shortFrom(m.from)),
+      el("span", { class: "inbox-subject" }, m.subject || "(no subject)"),
+      el("span", { class: "inbox-actions" },
+        el("button", { class: "btn btn-xs", "data-act": "open", "data-id": m.id }, "open"),
+        el("button", { class: "btn btn-xs", "data-act": "summarize", "data-id": m.id }, "summary"),
+        el("button", { class: "btn btn-xs", "data-act": "reply", "data-id": m.id }, "reply"),
+        el("button", { class: "btn btn-xs", "data-act": "archive", "data-id": m.id }, "archive"),
+      ),
+    );
+    list.appendChild(row);
+  }
+}
+
 function render(state) {
   renderClock(state.now);
   renderServices(state.services || {});
@@ -371,6 +412,7 @@ function render(state) {
   renderSessions(state);
   renderLinear(state.linear);
   renderCalendar(state.calendar);
+  renderInbox(state.inbox);
 }
 
 // ── resizable columns ─────────────────────────────────────────────────────
@@ -559,6 +601,101 @@ document.getElementById("remote-add")?.addEventListener("click", () => {
 });
 document.getElementById("peer-add-form")?.addEventListener("submit", submitAddPeer);
 document.getElementById("peer-add-cancel")?.addEventListener("click", () => showPeerForm(false));
+
+// ── inbox + compose ───────────────────────────────────────────────────────
+
+function openCompose(prefill = {}) {
+  const modal = $("compose-modal");
+  const form = $("compose-form");
+  form.reset();
+  $("compose-error").hidden = true;
+  for (const k of ["to", "cc", "bcc", "subject", "body", "reply_to_id"]) {
+    if (prefill[k] != null) form.elements[k].value = prefill[k];
+  }
+  modal.hidden = false;
+  form.elements.to.focus();
+}
+
+function closeCompose() { $("compose-modal").hidden = true; }
+
+async function inboxAction(id, act) {
+  if (!id) return;
+  try {
+    if (act === "open") {
+      window.open(`https://mail.google.com/mail/u/0/#inbox/${encodeURIComponent(id)}`, "_blank", "noopener");
+    } else if (act === "summarize") {
+      toast("summarizing…");
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/summarize`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("summarize failed: " + (j.error || r.status), 4000);
+      toast(j.summary || "(no body)", 8000);
+    } else if (act === "archive") {
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/mark`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "archive" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("archive failed: " + (j.error || r.status), 4000);
+      toast("archived");
+      reload();
+    } else if (act === "reply") {
+      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) return toast("read failed: " + (j.error || r.status), 4000);
+      const m = j.message || {};
+      const subj = (m.subject || "").replace(/^(re:\s*)+/i, "");
+      openCompose({
+        to: m.from || "",
+        subject: subj ? `Re: ${subj}` : "Re:",
+        body: "",
+        reply_to_id: id,
+      });
+    }
+  } catch (e) {
+    toast("error: " + e.message, 4000);
+  }
+}
+
+$("inbox-list")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  inboxAction(btn.dataset.id, btn.dataset.act);
+});
+
+$("inbox-compose")?.addEventListener("click", () => openCompose());
+$("compose-cancel")?.addEventListener("click", closeCompose);
+$("compose-modal")?.addEventListener("click", (ev) => {
+  if (ev.target.id === "compose-modal") closeCompose();
+});
+$("compose-form")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    to:      fd.get("to"),
+    cc:      fd.get("cc") || undefined,
+    bcc:     fd.get("bcc") || undefined,
+    subject: fd.get("subject"),
+    body:    fd.get("body") || "",
+    reply_to_id: fd.get("reply_to_id") || undefined,
+  };
+  const err = $("compose-error");
+  err.hidden = true;
+  try {
+    const r = await fetch("/api/inbox/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) { err.textContent = j.error || `error ${r.status}`; err.hidden = false; return; }
+    closeCompose();
+    toast("sent");
+  } catch (e) {
+    err.textContent = e.message;
+    err.hidden = false;
+  }
+});
 
 initResizableColumns();
 

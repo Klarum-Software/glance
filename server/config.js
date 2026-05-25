@@ -13,6 +13,19 @@ const DEFAULTS = {
   inboxDir:   path.join(os.homedir(), "claude-inbox"),
   // optional: path to a calendar.js providing `list 7`-style stdout
   calendarBin: null,
+  // optional: path to gmail.js providing list/read/send/summarize/mark
+  gmailBin: null,
+  // unread inbox cap fetched per /api/state cycle
+  gmailMaxUnread: 20,
+  // filter noisy senders/subjects out of the inbox column. Patterns use "*"
+  // wildcards (case-insensitive). labelExcludes matches Gmail label IDs;
+  // CATEGORY_PROMOTIONS and CATEGORY_SOCIAL are excluded by default so the
+  // column stays focused on real mail.
+  gmailBlacklist: {
+    fromPatterns:    [],
+    subjectPatterns: [],
+    labelExcludes:   ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"],
+  },
   // optional: inbox-ui /api/linear/sync endpoint
   linearSyncUrl: null,
   // optional: Linear API key for built-in sync (alternative to linearSyncUrl)
@@ -39,6 +52,8 @@ function load() {
   if (process.env.GLANCE_HOST)         env.host = process.env.GLANCE_HOST;
   if (process.env.GLANCE_INBOX)        env.inboxDir = process.env.GLANCE_INBOX;
   if (process.env.GLANCE_CALENDAR_BIN) env.calendarBin = process.env.GLANCE_CALENDAR_BIN;
+  if (process.env.GLANCE_GMAIL_BIN)    env.gmailBin    = process.env.GLANCE_GMAIL_BIN;
+  if (process.env.GLANCE_GMAIL_MAX_UNREAD) env.gmailMaxUnread = Number(process.env.GLANCE_GMAIL_MAX_UNREAD);
   if (process.env.GLANCE_LINEAR_SYNC)     env.linearSyncUrl = process.env.GLANCE_LINEAR_SYNC;
   if (process.env.GLANCE_LINEAR_API_KEY) env.linearApiKey  = process.env.GLANCE_LINEAR_API_KEY;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);

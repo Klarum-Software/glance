@@ -33,8 +33,12 @@ all you need for a personal dashboard. No verification is required.
 From the repo root:
 
 ```
-node server/bin/gcal-auth.js
+node server/bin/google-auth.js --calendar
 ```
+
+(`gcal-auth.js` still works as a deprecated alias for `google-auth.js --calendar`.
+If you want Gmail support too, see [GMAIL-SETUP.md](GMAIL-SETUP.md) and pass
+`--gmail` or no flags at all to get both scopes.)
 
 - Paste the `client_id` and `client_secret` when prompted.
 - A browser tab opens; sign in to your Google account and grant the
