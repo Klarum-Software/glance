@@ -97,14 +97,6 @@ function fmtAgo(input) {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
-function fmtIdle(s) {
-  if (s == null) return "";
-  if (s < 60) return "active";
-  if (s < 3600) return `${Math.floor(s / 60)}m idle`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h idle`;
-  return `${Math.floor(s / 86400)}d idle`;
-}
-
 function renderPeerRow(p) {
   const dot  = el("span", { class: "peer-dot " + (p.online ? "online" : "offline") });
   const head = el("div", { class: "peer-head" },
@@ -140,35 +132,42 @@ function renderPeerRow(p) {
     );
   }
   const s = p.snapshot;
-  const sessions = s.tmux_sessions || [];
-  const sessTxt = sessions.length
-    ? sessions.map(t => `${t.name}·${t.windows}w${t.attached ? "·atch" : ""}·${fmtIdle(t.idle_s)}`).join(" / ")
+  const t = s.active_tmux;
+  const sessTxt = t
+    ? `${t.session || "tmux"}${t.window ? ":" + t.window : ""}` +
+      (t.pane_current_command ? ` · ${t.pane_current_command}` : "")
     : "no tmux";
-  const topCpu = s.top_cpu ? `${s.top_cpu.name} ${Math.round(s.top_cpu.pct)}%` : "—";
-  const topMem = s.top_mem ? `${s.top_mem.name} ${Math.round(s.top_mem.pct)}%` : "—";
+  const claudeRunning = Array.isArray(s.agents)
+    ? s.agents.filter(a => a.kind === "claude" && a.state === "running").length
+    : 0;
+  const gitTxt = s.git && s.git.branch
+    ? `${s.git.repo || ""}/${s.git.branch}${s.git.dirty ? ` +${s.git.dirty}` : ""}`
+    : "—";
+  const loadTxt = typeof s.load_1m === "number" ? s.load_1m.toFixed(2) : "—";
+  const memTxt  = s.mem_pct != null ? `${s.mem_pct}%` : "—";
 
   return el("div", { class: cls + (p.is_self ? " self" : "") },
     head,
     el("div", { class: "peer-grid" },
       el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "user"),
-        el("span", { class: "peer-val" }, `${s.user} · up ${fmtUptime(s.uptime_s)}`),
+        el("span", { class: "peer-key" }, "up"),
+        el("span", { class: "peer-val" }, fmtUptime(s.uptime_s)),
       ),
       el("div", { class: "peer-cell" },
         el("span", { class: "peer-key" }, "load"),
-        el("span", { class: "peer-val" }, `${s.load_1m.toFixed(2)} · mem ${s.mem_pct}%`),
+        el("span", { class: "peer-val" }, `${loadTxt} · mem ${memTxt}`),
       ),
       el("div", { class: "peer-cell wide" },
         el("span", { class: "peer-key" }, "tmux"),
         el("span", { class: "peer-val" }, sessTxt),
       ),
       el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "top"),
-        el("span", { class: "peer-val" }, `${topCpu} cpu / ${topMem} mem`),
+        el("span", { class: "peer-key" }, "git"),
+        el("span", { class: "peer-val" }, gitTxt),
       ),
       el("div", { class: "peer-cell" },
         el("span", { class: "peer-key" }, "claude"),
-        el("span", { class: "peer-val claude-procs" }, `${s.claude_procs || 0} running`),
+        el("span", { class: "peer-val claude-procs" }, `${claudeRunning} running`),
       ),
     ),
     removeBtn,

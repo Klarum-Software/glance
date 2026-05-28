@@ -112,7 +112,10 @@ function renderRemote(state) {
             row.add_child(new St.Label({ text: p.fetch_error ? `presence: ${p.fetch_error}` : "no presence agent", style_class: "glance-peer-note" }));
         } else {
             const s = p.snapshot;
-            const stats = `up ${fmt.fmtUptime(s.uptime_s)} · load ${s.load_1m?.toFixed?.(2) ?? "—"} · mem ${s.mem_pct ?? "—"}% · claude ${s.claude_procs || 0}`;
+            const claudeRunning = Array.isArray(s.agents)
+                ? s.agents.filter(a => a.kind === "claude" && a.state === "running").length
+                : 0;
+            const stats = `up ${fmt.fmtUptime(s.uptime_s)} · load ${s.load_1m?.toFixed?.(2) ?? "—"} · mem ${s.mem_pct ?? "—"}% · claude ${claudeRunning}`;
             row.add_child(new St.Label({ text: stats, style_class: "glance-peer-note" }));
             if (s.spark_load || s.spark_mem) {
                 const sparks = [];
