@@ -8,10 +8,11 @@ zero-deps, pull-based, tailnet-local architecture described in
 
 > **Status as of 2026-05-21**: items 1 (tmux + agent activity), 2 (per-peer
 > git context), and 3 (sparklines) are now implemented. Items 1 and 2 live
-> in the [klarum-presence/](../klarum-presence/) agent. Item 3 (sparklines)
-> lives in `server/server.js` — the server keeps an in-memory ring buffer
-> per peer and stamps `spark_load` / `spark_mem` strings onto each snapshot
-> before returning the state.
+> in the [klarum-presence](https://github.com/Klarum-Software/klarum-presence)
+> agent (extracted from this repo on 2026-05-22; previously in-tree under
+> `klarum-presence/`). Item 3 (sparklines) lives in `server/server.js`. The
+> server keeps an in-memory ring buffer per peer and stamps `spark_load` /
+> `spark_mem` strings onto each snapshot before returning the state.
 
 ## Top 3 features to add next
 
