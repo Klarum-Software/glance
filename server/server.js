@@ -23,11 +23,13 @@ const http        = require("http");
 const https       = require("https");
 const fs          = require("fs");
 const path        = require("path");
+const crypto      = require("crypto");
 const { spawn }   = require("child_process");
 const { execSync } = require("child_process");
 
 const platform   = require("./platform");
 const configMod  = require("./config");
+const goauth     = require("./bin/google-oauth");
 let   cfg        = configMod.load();
 
 const PKG       = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -1071,6 +1073,123 @@ async function actionInboxSend(body) {
   catch { return { ok: true }; }
 }
 
+// ── google oauth (browser connect flow) ─────────────────────────────────────
+//
+// The CLI helper (bin/google-auth.js) does a loopback grab; here the dashboard
+// drives the same OAuth through glance's own origin. Google only allows http
+// redirect URIs on localhost, so the callback is fixed to localhost: connect
+// from http://localhost:<port> on the machine you're configuring. Remote
+// (tailnet) instances still use the CLI helper.
+
+function googleRedirectUri() {
+  return `http://localhost:${cfg.port}/api/google/connect/callback`;
+}
+
+const googleStates = new Map();   // state -> { scopes, redirectUri, flags, ts }
+function pruneGoogleStates() {
+  const now = Date.now();
+  for (const [k, v] of googleStates) if (now - v.ts > 600_000) googleStates.delete(k);
+}
+
+function targetFlags(target) {
+  return { calendar: target === "calendar" || target === "all", gmail: target === "gmail" || target === "all" };
+}
+
+async function googleConnect(body) {
+  const flags = targetFlags(body && body.target);
+  if (!flags.calendar && !flags.gmail) return { ok: false, error: "target must be calendar, gmail, or all", statusCode: 400 };
+
+  const client = goauth.loadClientFromFiles();
+  if (!client) {
+    return { ok: false, statusCode: 400,
+      error: `No OAuth client found. Save the client JSON to ${goauth.CLIENT_FILE} (see docs/CALENDAR-SETUP.md).` };
+  }
+
+  // Already authorized for the wanted surfaces? Just wire the bin(s); no browser.
+  const st = goauth.status();
+  const haveAll = (!flags.calendar || st.calendar.authorized) && (!flags.gmail || st.gmail.authorized);
+  if (haveAll) {
+    goauth.setBins(flags, true);
+    cfg = configMod.load();
+    return { ok: true, mode: "instant" };
+  }
+
+  // Union requested scopes with already-granted ones so a partial re-consent
+  // never drops a surface that was connected before.
+  const tok  = goauth.readToken();
+  const have = (tok && tok.scopes) || [];
+  const want = new Set(goauth.scopesForFlags(flags));
+  if (have.includes(goauth.SCOPES.calendar)) want.add(goauth.SCOPES.calendar);
+  if (have.includes(goauth.SCOPES.gmail))    want.add(goauth.SCOPES.gmail);
+
+  const redirectUri = googleRedirectUri();
+  if (client.type === "web" && !(client.redirectUris || []).includes(redirectUri)) {
+    return { ok: false, statusCode: 400, needs_redirect: redirectUri,
+      error: `Add ${redirectUri} to this client's Authorized redirect URIs in the Cloud Console, then retry.` };
+  }
+
+  pruneGoogleStates();
+  const state = crypto.randomBytes(16).toString("hex");
+  googleStates.set(state, { scopes: [...want], redirectUri, flags, ts: Date.now() });
+  return { ok: true, mode: "redirect", url: goauth.buildAuthUrl({ clientId: client.clientId, redirectUri, scopes: [...want], state }) };
+}
+
+function googleClosePage(res, status, title, detail) {
+  const body = `<!doctype html><meta charset="utf-8"><title>${title}</title>`
+    + `<body style="font:14px system-ui;background:#0d0d10;color:#f4f4f0;display:flex;`
+    + `align-items:center;justify-content:center;height:100vh;margin:0">`
+    + `<div style="text-align:center"><h1 style="font-size:18px">${title}</h1>`
+    + `<p style="color:#88898d">${detail || ""}</p>`
+    + `<p><a href="/?panel=settings" style="color:#6aa3ff">Back to glance</a></p></div>`;
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
+async function googleCallback(query, res) {
+  const code  = query.get("code");
+  const state = query.get("state");
+  const err   = query.get("error");
+  if (err)  return googleClosePage(res, 400, "Authorization failed", err);
+  const ctx = state && googleStates.get(state);
+  if (!code || !ctx) return googleClosePage(res, 400, "Expired or invalid request", "Start Connect again from Settings.");
+  googleStates.delete(state);
+
+  const client = goauth.loadClientFromFiles();
+  if (!client) return googleClosePage(res, 400, "No OAuth client", "");
+  try {
+    const tokens = await goauth.exchangeCode({ clientId: client.clientId, clientSecret: client.clientSecret, code, redirectUri: ctx.redirectUri });
+    const out = goauth.tokenFromResponse(client, tokens, ctx.scopes, goauth.readToken());
+    if (!out.refresh_token) {
+      return googleClosePage(res, 400, "No refresh token returned",
+        "Revoke glance at myaccount.google.com/permissions and connect again.");
+    }
+    goauth.writeToken(out);
+    goauth.setBins(ctx.flags, true);
+    cfg = configMod.load();
+    res.writeHead(302, { location: "/?panel=settings&connected=1" });
+    res.end();
+  } catch (e) {
+    return googleClosePage(res, 502, "Token exchange failed", e.message);
+  }
+}
+
+function googleDisconnect(body) {
+  const flags = targetFlags(body && body.target);
+  if (!flags.calendar && !flags.gmail) return { ok: false, error: "target must be calendar, gmail, or all", statusCode: 400 };
+  goauth.setBins(flags, false);
+  cfg = configMod.load();
+  return { ok: true };
+}
+
+async function googleRemove() {
+  const tok = goauth.readToken();
+  goauth.setBins({ calendar: true, gmail: true }, false);
+  cfg = configMod.load();
+  goauth.deleteToken();
+  if (tok && tok.refresh_token) await goauth.revokeToken(tok.refresh_token);
+  return { ok: true };
+}
+
 // ── router ─────────────────────────────────────────────────────────────────
 
 const requestHandler = async (req, res) => {
@@ -1166,6 +1285,26 @@ const requestHandler = async (req, res) => {
       const body = await readBody(req);
       const r = await actionInboxSend(body);
       return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "GET" && req.url === "/api/google/status") {
+      return send(res, 200, { ...goauth.status(), redirect_uri: googleRedirectUri() });
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/google/connect/callback")) {
+      const u = new URL(req.url, "http://127.0.0.1");
+      return googleCallback(u.searchParams, res);
+    }
+    if (req.method === "POST" && req.url === "/api/google/connect") {
+      const body = await readBody(req);
+      const r = await googleConnect(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/google/disconnect") {
+      const body = await readBody(req);
+      const r = googleDisconnect(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/google/remove") {
+      return send(res, 200, await googleRemove());
     }
     if (req.method === "GET" && req.url === "/api/config/custom-widgets") {
       return send(res, 200, { widgets: Array.isArray(cfg.customWidgets) ? cfg.customWidgets : [] });
