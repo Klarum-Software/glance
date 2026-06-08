@@ -63,7 +63,11 @@ A dot appears in the top panel. Click it for the dashboard.
 
 `host` defaults to `127.0.0.1`; set it to `"tailscale"` to bind this
 machine's tailnet IPv4 so you can open the dashboard from another tailnet
-machine (and nowhere else). Every field is also overridable via env
+machine (and nowhere else). The IP is resolved at startup via
+`tailscale ip -4`, so nothing is hardcoded and it survives a changed tailnet
+address; if tailscale is down it falls back to loopback-only. This is the
+recommended setting on the mac mini control center, where the browser
+dashboard is reached over the tailnet. Every field is also overridable via env
 (`GLANCE_PORT`, `GLANCE_HOST`, `GLANCE_TMUX_SESSION`, `GLANCE_TMUX_HOST`,
 `GLANCE_INBOX`, `GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_SERVICES`).
 See `server/config.js`.
