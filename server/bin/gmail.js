@@ -83,7 +83,7 @@ async function ensureFresh(tok) {
   return tok;
 }
 
-function gmailRequest(tok, opts, bodyBuf) {
+function gmailRequestOnce(tok, opts, bodyBuf) {
   return new Promise((resolve, reject) => {
     const headers = Object.assign({ authorization: `Bearer ${tok.access_token}` }, opts.headers || {});
     if (bodyBuf) headers["content-length"] = Buffer.byteLength(bodyBuf);
@@ -102,7 +102,9 @@ function gmailRequest(tok, opts, bodyBuf) {
         if (text) { try { data = JSON.parse(text); } catch { data = { raw: text }; } }
         if (r.statusCode >= 400) {
           const msg = (data && data.error && data.error.message) || text || `HTTP ${r.statusCode}`;
-          return reject(new Error(msg));
+          const err = new Error(msg);
+          err.status = r.statusCode;
+          return reject(err);
         }
         resolve(data);
       });
@@ -112,6 +114,19 @@ function gmailRequest(tok, opts, bodyBuf) {
     if (bodyBuf) req.write(bodyBuf);
     req.end();
   });
+}
+
+// The pre-expiry refresh in ensureFresh can still race the token clock (skew,
+// a token revoked server-side, a slow call). On a 401 refresh once and retry
+// before giving up, so a single stale token doesn't blank the INBOX column.
+async function gmailRequest(tok, opts, bodyBuf) {
+  try {
+    return await gmailRequestOnce(tok, opts, bodyBuf);
+  } catch (e) {
+    if (e.status !== 401) throw e;
+    await refreshAccessToken(tok);
+    return gmailRequestOnce(tok, opts, bodyBuf);
+  }
 }
 
 // ── MIME helpers ─────────────────────────────────────────────────────────

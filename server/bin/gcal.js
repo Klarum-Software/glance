@@ -98,6 +98,11 @@ function listEvents(tok, days) {
       const chunks = [];
       r.on("data", (c) => chunks.push(c));
       r.on("end", () => {
+        if (r.statusCode === 401) {
+          const err = new Error("Calendar API 401 unauthorized");
+          err.status = 401;
+          return reject(err);
+        }
         try {
           const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           if (data.error) return reject(new Error(data.error.message || "Calendar API error"));
@@ -109,6 +114,19 @@ function listEvents(tok, days) {
     req.on("timeout", () => { req.destroy(new Error("list events timed out")); });
     req.end();
   });
+}
+
+// The pre-expiry refresh in ensureFresh can still race the token clock (skew,
+// a token revoked server-side, a slow call). On a 401 refresh once and retry
+// before giving up, so a single stale token doesn't blank the CALENDAR column.
+async function listEventsWithRetry(tok, days) {
+  try {
+    return await listEvents(tok, days);
+  } catch (e) {
+    if (e.status !== 401) throw e;
+    await refreshAccessToken(tok);
+    return listEvents(tok, days);
+  }
 }
 
 (async () => {
@@ -128,7 +146,7 @@ function listEvents(tok, days) {
   }
 
   tok = await ensureFresh(tok);
-  const events = await listEvents(tok, days);
+  const events = await listEventsWithRetry(tok, days);
 
   if (cmd === "list") {
     for (const ev of events) {
