@@ -4,53 +4,45 @@ Glance shows your upcoming Google Calendar events in the CALENDAR column.
 The token lives in `~/.config/glance/google-token.json` (mode 600). Nothing
 private is stored in this repo.
 
-There are two ways to connect. If you have the gcloud CLI, the quick path
-below is the easiest; otherwise create your own OAuth client (sections 1-3).
+Glance uses your own OAuth client. Google has stopped letting third-party
+tools borrow shared or default client IDs (including the gcloud CLI's) for
+Calendar and Gmail scopes, so bring-your-own-client is the only durable path.
+The client is created once per project; after that, each machine just drops
+the client file in place and runs the helper, with no secret to paste.
 
-## Quick connect (gcloud)
+## 1. Create an OAuth client (once per project)
 
-If you already use the Google Cloud SDK (`gcloud auth login` done once), you
-can skip the Cloud Console entirely. This borrows gcloud's own OAuth client,
-enables the Calendar API on your active project, runs an ADC login for the
-calendar scope, and writes both the token and `calendarBin` into your config:
+One-time setup, about 5 minutes. For Klarum, do this in the
+`klarum-internal-tools` project so the whole team shares one client.
 
-```
-gcloud config set project klarum-internal-tools   # or your own project
-node server/bin/google-auth.js --gcloud --calendar
-```
-
-A browser tab opens for consent (this is gcloud's standard ADC login). When
-it finishes, restart the backend and the CALENDAR column populates within a
-refresh cycle. Add `--gmail`, or drop the scope flags entirely, to connect
-Gmail in the same run. See [GMAIL-SETUP.md](GMAIL-SETUP.md) for the Gmail
-column. No client_id/secret to paste, no `config.json` to edit by hand.
-
-The rest of this doc is the manual route: bring your own OAuth client.
-
-## 1. Create an OAuth client in Google Cloud
-
-One-time setup, about 5 minutes.
-
-1. Open <https://console.cloud.google.com> and create (or select) a project.
+1. Open <https://console.cloud.google.com> and select the project.
 2. APIs & Services -> Library -> search "Google Calendar API" -> Enable.
+   (The helper also tries to enable this for you via gcloud; doing it here is
+   the fallback if you lack the gcloud rights.)
 3. APIs & Services -> OAuth consent screen:
-   - User Type: External.
-   - App name: anything (`glance` is fine).
-   - User support email: yours.
-   - Developer contact: yours.
-   - Scopes step: skip; the script requests `calendar.readonly` at runtime.
-   - Test users: add your own Google account.
+   - User Type: Internal (Workspace org) or External.
+   - App name: `glance`. User support + developer contact: yours.
+   - Scopes step: skip; the helper requests `calendar.readonly` at runtime.
+   - Test users (External only): add the Google accounts that will connect.
 4. APIs & Services -> Credentials -> Create Credentials -> OAuth client ID:
-   - Application type: **Desktop app**.
-   - Name: `glance`.
-   - Click Create.
-5. Copy the **Client ID** and **Client Secret** from the resulting dialog.
+   - Application type: **Desktop app**. Name: `glance`. Click Create.
+5. In the resulting dialog, click **Download JSON**. This is the
+   `client_secret_*.json` file the helper auto-loads.
 
-The app stays in "Testing" mode. That is fine for personal use. Google's
-test mode only allows up to 100 explicitly-listed test users, which is
-all you need for a personal dashboard. No verification is required.
+## 2. Put the client file where the helper looks for it
 
-## 2. Run the auth helper
+Copy the downloaded JSON to either location on each machine that connects:
+
+```
+cp ~/Downloads/client_secret_*.json ~/.config/glance/google-client.json
+```
+
+or point an env var at it: `export GLANCE_GOOGLE_CLIENT_FILE=/path/to/client_secret.json`.
+
+This file is not a true secret for a Desktop client, but keep it out of the
+repo regardless. It is the one artifact an admin distributes to the team.
+
+## 3. Run the auth helper
 
 From the repo root:
 
@@ -59,18 +51,21 @@ node server/bin/google-auth.js --calendar
 ```
 
 (`gcal-auth.js` still works as a deprecated alias for `google-auth.js --calendar`.
-If you want Gmail support too, see [GMAIL-SETUP.md](GMAIL-SETUP.md) and pass
-`--gmail` or no flags at all to get both scopes.)
+For Gmail too, see [GMAIL-SETUP.md](GMAIL-SETUP.md) and pass `--gmail`, or no
+flags at all, to get both scopes.)
 
-- Paste the `client_id` and `client_secret` when prompted.
-- A browser tab opens; sign in to your Google account and grant the
-  calendar read scope.
+- The helper loads the client from the file above (no pasting). If no file is
+  found, it reuses the client in an existing token, then falls back to a prompt.
+- A browser tab opens; sign in and grant the calendar read scope.
 - The tab shows "Authorized" once done. Return to the terminal.
-- Token is written to `~/.config/glance/google-token.json`.
+- The token is written to `~/.config/glance/google-token.json`, and
+  `calendarBin` is wired into `~/.config/glance/config.json` automatically.
 
-## 3. Wire it up
+Restart the glance backend and the CALENDAR column populates within a refresh
+cycle (about 60 seconds). The wiring step means you do not normally edit
+`config.json` by hand; the manual key is below for reference.
 
-Add to `~/.config/glance/config.json`:
+## config.json reference
 
 ```json
 {
@@ -78,11 +73,7 @@ Add to `~/.config/glance/config.json`:
 }
 ```
 
-The auth helper prints the absolute path at the end; copy it from there.
-
-Restart the glance backend (disable then enable the extension, or kill
-the `node server/server.js` process). The CALENDAR column should
-populate within a refresh cycle (about 60 seconds).
+The helper writes this for you; set it by hand only if you skipped the helper.
 
 ## Manual sanity check
 
