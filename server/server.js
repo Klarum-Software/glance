@@ -1119,11 +1119,10 @@ async function googleConnect(body) {
   if (have.includes(goauth.SCOPES.calendar)) want.add(goauth.SCOPES.calendar);
   if (have.includes(goauth.SCOPES.gmail))    want.add(goauth.SCOPES.gmail);
 
+  // Google is the source of truth for which redirect URIs are registered; the
+  // downloaded client file is often a stale snapshot, so we don't pre-block on
+  // it. If the callback really isn't registered, Google shows redirect_uri_mismatch.
   const redirectUri = googleRedirectUri();
-  if (client.type === "web" && !(client.redirectUris || []).includes(redirectUri)) {
-    return { ok: false, statusCode: 400, needs_redirect: redirectUri,
-      error: `Add ${redirectUri} to this client's Authorized redirect URIs in the Cloud Console, then retry.` };
-  }
 
   pruneGoogleStates();
   const state = crypto.randomBytes(16).toString("hex");
