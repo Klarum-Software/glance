@@ -32,6 +32,10 @@
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin</string>
+        <!-- launchd starts us with no locale; tmux mangles its tab-delimited
+             output under C/POSIX, so give the backend a UTF-8 one. -->
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
     </dict>
 </dict>
 </plist>
