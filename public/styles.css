@@ -327,6 +327,64 @@ html, body {
 .muted { color: var(--ink-3); }
 .empty { color: var(--ink-3); font-style: italic; padding: 4px 6px; }
 
+/* ── tender card ──────────────────────────────────────────────────────────
+   Lifted from pivi's email tender_card: an accent top-bar, a title/value head,
+   and pill badges. Shared by the session and peer cards; --accent is set per
+   variant. */
+
+.tcard {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--rule-3);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
+  --accent: var(--ink-4);
+}
+.tcard-accent { height: 3px; width: 100%; background: var(--accent); }
+.tcard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+}
+.tcard-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tcard-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tcard-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.tcard-title.mute, .tcard-value.mute { color: var(--ink-3); font-weight: 400; }
+.tcard-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.tcard-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--rule-3);
+  color: var(--ink-3);
+  background: var(--surface-sunk);
+}
+.tcard-badge.warn { color: var(--warn); background: rgba(232,162,61,0.13); border-color: rgba(232,162,61,0.30); }
+.tcard-badge.info { color: var(--info); background: rgba(106,163,255,0.13); border-color: rgba(106,163,255,0.30); }
+
 /* ── remote column ────────────────────────────────────────────────────── */
 
 .remote-grid {
@@ -380,20 +438,16 @@ html, body {
 .peer-add-buttons { display: flex; gap: 6px; }
 .peer-add-error { font-size: 10px; color: var(--neg); min-height: 12px; }
 
-.peer-row {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 9px;
-  border-left: 2px solid var(--remote);
-  background: var(--surface);
-  border-radius: 3px;
-  position: relative;
+.tcard-peer { --accent: var(--remote); }
+.tcard-peer .tcard-body { gap: 5px; }
+.tcard-peer.self    { --accent: var(--brand); }
+.tcard-peer.stale   { --accent: var(--warn); }
+.tcard-peer.offline { --accent: var(--ink-4); opacity: 0.55; }
+/* manual peers: striped accent rather than a solid bar */
+.tcard-peer.manual .tcard-accent {
+  background: repeating-linear-gradient(
+    90deg, var(--accent) 0 6px, transparent 6px 11px);
 }
-.peer-row.manual  { border-left-style: dashed; }
-.peer-row.self    { border-left-color: var(--info); }
-.peer-row.offline { border-left-color: var(--ink-4); opacity: 0.55; background: transparent; }
-.peer-row.stale   { border-left-color: var(--warn); }
 .peer-remove {
   position: absolute;
   top: 4px; right: 5px;
@@ -483,60 +537,20 @@ html, body {
 .sessions-list::-webkit-scrollbar { width: 7px; }
 .sessions-list::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 3px; }
 
-.session-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 5px 7px;
-  border-left: 2px solid var(--sessions);
-  background: var(--surface);
-  border-radius: 3px;
-  min-width: 0;
-}
-.session-row.worktree { border-left-color: var(--warn); }
-.session-row.legend   { border-left-color: var(--ink-4); background: transparent; padding: 2px 7px; }
-.session-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.tcard-session          { --accent: var(--sessions); }
+.tcard-session.alt      { --accent: #ff857a; }
+.tcard-session.worktree { --accent: var(--warn); }
+/* legend rows (other/free) are not sessions: no accent bar, faint surround */
+.tcard-legend { background: transparent; border-color: var(--rule-4); }
+.tcard-legend .tcard-body { padding: 3px 9px; }
 .session-swatch {
   width: 8px; height: 8px;
   border-radius: 2px;
-  background: var(--sessions);
   flex-shrink: 0;
   align-self: center;
 }
-.session-swatch.alt   { background: #ff857a; }
 .session-swatch.other { background: var(--paper-3); border: 1px solid var(--rule-2); }
 .session-swatch.free  { background: transparent; border: 1px dashed var(--rule-2); }
-.session-cwd {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-.session-rss {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--sessions);
-  font-weight: 600;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-.session-row.worktree .session-rss { color: var(--warn); }
-.session-row.legend   .session-rss { color: var(--ink-3); font-weight: 400; }
-.session-meta {
-  font-size: 10px;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  padding-left: 14px;
-  display: flex;
-  gap: 8px;
-}
-.session-tag { text-transform: uppercase; letter-spacing: 0.04em; }
-.session-tag.wt  { color: var(--warn); }
-.session-tag.sub { color: var(--info); }
 .sessions-empty { color: var(--ink-3); font-style: italic; font-size: 11px; padding: 4px 6px; }
 
 /* ── terminal column ──────────────────────────────────────────────────── */

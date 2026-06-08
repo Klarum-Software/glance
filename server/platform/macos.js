@@ -53,7 +53,9 @@ function processList() {
 
 function processCwd(pid) {
   try {
-    return execSync(`lsof -p ${pid} -d cwd -Fn 2>/dev/null | grep ^n | head -1 | sed 's/^n//'`,
+    // -a ANDs the -p and -d selectors; without it lsof ORs them and lists the
+    // cwd of every process, so head -1 returns "/" for every session.
+    return execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | grep ^n | head -1 | sed 's/^n//'`,
       { encoding: "utf8" }).trim() || null;
   } catch { return null; }
 }
