@@ -41,11 +41,16 @@ user asks "what's next for REMOTE."
   any.
 - **Bind localhost or the tailnet, never the open internet.** Default
   `host` is `127.0.0.1`; `host: "tailscale"` resolves this machine's tailnet
-  IPv4 and binds only that (falling back to loopback if tailscale is down,
-  so a broken tailscale never widens exposure). The backend reaches the
-  network only via local CLIs (`tailscale status --json`, `tmux`) or tailnet
-  peers on port 5176. The terminal endpoints run shell input, so widening
-  the bind beyond the tailnet is off the table.
+  IPv4 and binds loopback plus that IP (two listeners, never `0.0.0.0`), and
+  falls back to loopback-only if tailscale is down so a broken tailscale
+  never widens exposure. The backend reaches the network only via local CLIs
+  (`tailscale status --json`, `tmux`), tailnet peers on 5176, or another
+  glance instance via `tmuxHost`. The terminal endpoints run shell input, so
+  widening the bind beyond the tailnet is off the table.
+- **One tmux `main`, hosted on s01.** s01's glance drives it locally; every
+  other machine sets `tmuxHost` to s01's glance URL and its backend proxies
+  `/api/tmux*` there over the tailnet (no ssh, no mosh). tmux is multi-client,
+  so glance coexists with a human `mosh`/`tmux attach` on the same session.
 - **No comments explaining WHAT.** Names cover that. Comments are for WHY:
   a hidden constraint, a workaround, a non-obvious invariant.
 - **Extension code is 4-space indent (GJS convention); server code is

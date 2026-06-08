@@ -64,9 +64,9 @@ A dot appears in the top panel. Click it for the dashboard.
 `host` defaults to `127.0.0.1`; set it to `"tailscale"` to bind this
 machine's tailnet IPv4 so you can open the dashboard from another tailnet
 machine (and nowhere else). Every field is also overridable via env
-(`GLANCE_PORT`, `GLANCE_HOST`, `GLANCE_TMUX_SESSION`, `GLANCE_INBOX`,
-`GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_SERVICES`). See
-`server/config.js`.
+(`GLANCE_PORT`, `GLANCE_HOST`, `GLANCE_TMUX_SESSION`, `GLANCE_TMUX_HOST`,
+`GLANCE_INBOX`, `GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_SERVICES`).
+See `server/config.js`.
 
 ## Connecting your accounts
 
@@ -79,6 +79,12 @@ client), then click the screen and type. Keystrokes are forwarded with
 `tmux send-keys` and the visible pane is polled with `capture-pane`, so
 there is no `Ctrl+b` and no PTY. Start a session with `tmux new -s main`
 on the host running the backend.
+
+The `main` session can live on one always-on box (e.g. the mac mini) while
+every machine runs its own glance. Set `tmuxHost` (or `GLANCE_TMUX_HOST`) on
+the others to that box's glance URL, e.g. `http://100.66.100.32:5172`, and
+their backend proxies all tmux calls there over the tailnet, no ssh or mosh.
+tmux is multi-client, so glance coexists with a human `mosh`/`tmux attach`.
 
 ### Calendar
 
