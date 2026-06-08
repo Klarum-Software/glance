@@ -10,10 +10,14 @@ Calendar and Gmail scopes, so bring-your-own-client is the only durable path.
 The client is created once per project; after that, each machine just drops
 the client file in place and runs the helper, with no secret to paste.
 
+For Klarum, the client already exists: `klarum-dev` in `klarum-internal-tools`.
+Download its JSON from the Console (APIs & Services -> Credentials -> klarum-dev
+-> Download) and skip to section 2. Anyone standing this up in a fresh project
+follows section 1.
+
 ## 1. Create an OAuth client (once per project)
 
-One-time setup, about 5 minutes. For Klarum, do this in the
-`klarum-internal-tools` project so the whole team shares one client.
+One-time setup, about 5 minutes.
 
 1. Open <https://console.cloud.google.com> and select the project.
 2. APIs & Services -> Library -> search "Google Calendar API" -> Enable.
@@ -25,7 +29,12 @@ One-time setup, about 5 minutes. For Klarum, do this in the
    - Scopes step: skip; the helper requests `calendar.readonly` at runtime.
    - Test users (External only): add the Google accounts that will connect.
 4. APIs & Services -> Credentials -> Create Credentials -> OAuth client ID:
-   - Application type: **Desktop app**. Name: `glance`. Click Create.
+   - Application type: **Desktop app** is simplest. A **Web application** client
+     (like klarum-dev) also works, as long as it has an `http://localhost`
+     redirect URI (any port/path) under Authorized redirect URIs: the helper
+     reuses that exact URI for its loopback callback. Make sure that port is
+     free while you run the helper.
+   - Name: `glance`. Click Create.
 5. In the resulting dialog, click **Download JSON**. This is the
    `client_secret_*.json` file the helper auto-loads.
 
@@ -39,8 +48,9 @@ cp ~/Downloads/client_secret_*.json ~/.config/glance/google-client.json
 
 or point an env var at it: `export GLANCE_GOOGLE_CLIENT_FILE=/path/to/client_secret.json`.
 
-This file is not a true secret for a Desktop client, but keep it out of the
-repo regardless. It is the one artifact an admin distributes to the team.
+Keep this file out of the repo and treat it as a secret (a Web client's secret
+is confidential; a Desktop client's is less so). It is the one artifact an admin
+distributes to the team, mode 600 alongside the token.
 
 ## 3. Run the auth helper
 

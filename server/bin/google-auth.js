@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 // One-time OAuth setup for Google APIs (Calendar + Gmail).
 //
-// glance uses your own OAuth client (a "Desktop app" client created once in a
-// Google Cloud project, e.g. klarum-internal-tools). Google has stopped letting
-// third-party tools borrow shared/default client IDs for Calendar and Gmail
-// scopes, so bring-your-own-client is the only durable path.
+// glance uses your own OAuth client, created once in a Google Cloud project
+// (e.g. the klarum-dev client in klarum-internal-tools). Google has stopped
+// letting third-party tools borrow shared/default client IDs for Calendar and
+// Gmail scopes, so bring-your-own-client is the only durable path.
+//
+// Both "Desktop app" and "Web application" clients work. Desktop clients accept
+// any loopback redirect; for a Web client the helper reuses a localhost redirect
+// URI already registered on the client, so that client needs one (any
+// http://localhost[:port][/path]) in its Authorized redirect URIs.
 //
 // To avoid pasting client_id/client_secret on every machine, this helper
 // auto-loads the client from, in order:
@@ -82,13 +87,39 @@ function ask(prompt) {
 // Pull client_id/client_secret/project_id out of a Cloud Console client-secrets
 // download, which wraps the fields under "installed" (Desktop) or "web".
 function parseClientSecrets(raw) {
+  const type  = raw.installed ? "installed" : raw.web ? "web" : "flat";
   const inner = raw.installed || raw.web || raw;
   if (!inner || !inner.client_id || !inner.client_secret) return null;
   return {
     clientId:     inner.client_id,
     clientSecret: inner.client_secret,
     projectId:    inner.project_id || null,
+    type,
+    redirectUris: inner.redirect_uris || (inner.redirect_uri ? [inner.redirect_uri] : []),
   };
+}
+
+// Decide where Google sends the auth code back. Desktop clients accept any
+// loopback port, so we use our own. Web clients (e.g. klarum-dev) only accept
+// a redirect URI registered in the Console, so we reuse a registered loopback
+// one verbatim: same host, port, and path Google will redirect to.
+function resolveRedirect(client) {
+  if (client.type !== "web") {
+    return { uri: REDIRECT_URI, host: "127.0.0.1", port: REDIRECT_PORT, pathname: "/" };
+  }
+  const loopback = (client.redirectUris || []).find((u) => {
+    try {
+      const x = new URL(u);
+      return x.protocol === "http:" && (x.hostname === "localhost" || x.hostname === "127.0.0.1");
+    } catch { return false; }
+  });
+  if (!loopback) {
+    throw new Error("this Web client has no http://localhost redirect URI registered. "
+      + "Add one in the Console (APIs & Services -> Credentials -> the client -> Authorized "
+      + "redirect URIs), or use a Desktop client.");
+  }
+  const x = new URL(loopback);
+  return { uri: loopback, host: x.hostname, port: Number(x.port) || 80, pathname: x.pathname || "/" };
 }
 
 // Find the OAuth client without making the user paste it where we can avoid it.
@@ -104,7 +135,7 @@ async function loadClient() {
   if (existing && existing.client_id && existing.client_secret) {
     const reuse = await ask(`Reuse client_id ending in ...${existing.client_id.slice(-12)}? [Y/n] `);
     if (!reuse || /^y/i.test(reuse)) {
-      return { clientId: existing.client_id, clientSecret: existing.client_secret, projectId: null };
+      return { clientId: existing.client_id, clientSecret: existing.client_secret, projectId: null, type: "installed", redirectUris: [] };
     }
   }
 
@@ -118,7 +149,7 @@ async function loadClient() {
     console.error("client_id and client_secret are required");
     process.exit(1);
   }
-  return { clientId, clientSecret, projectId: null };
+  return { clientId, clientSecret, projectId: null, type: "installed", redirectUris: [] };
 }
 
 // Best-effort: turn on the Calendar/Gmail APIs so the first request doesn't
@@ -150,10 +181,10 @@ function openUrl(url) {
   try { spawn(opener, args, { detached: true, stdio: "ignore" }).unref(); } catch {}
 }
 
-function waitForCode(expectedState) {
+function waitForCode(expectedState, redirect) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      const u = new URL(req.url, REDIRECT_URI);
+      const u = new URL(req.url, redirect.uri);
       const code  = u.searchParams.get("code");
       const state = u.searchParams.get("state");
       const err   = u.searchParams.get("error");
@@ -180,17 +211,17 @@ function waitForCode(expectedState) {
       resolve(code);
     });
     server.on("error", reject);
-    server.listen(REDIRECT_PORT, "127.0.0.1");
+    server.listen(redirect.port, redirect.host);
   });
 }
 
-function exchangeCode(clientId, clientSecret, code) {
+function exchangeCode(clientId, clientSecret, code, redirectUri) {
   return new Promise((resolve, reject) => {
     const body = new URLSearchParams({
       code,
       client_id:     clientId,
       client_secret: clientSecret,
-      redirect_uri:  REDIRECT_URI,
+      redirect_uri:  redirectUri,
       grant_type:    "authorization_code",
     }).toString();
     const req = https.request({
@@ -252,12 +283,14 @@ function wireConfig(flags) {
   console.log("");
 
   const client = await loadClient();
+  const redirect = resolveRedirect(client);
+  console.log(`Client ...${client.clientId.slice(-24)} (${client.type}), redirect ${redirect.uri}\n`);
   enableApis(flags, client.projectId);
 
   const state = crypto.randomBytes(16).toString("hex");
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id:     client.clientId,
-    redirect_uri:  REDIRECT_URI,
+    redirect_uri:  redirect.uri,
     response_type: "code",
     scope:         scopeStr,
     access_type:   "offline",
@@ -268,10 +301,10 @@ function wireConfig(flags) {
   console.log("Opening your browser to authorize. If it doesn't open, visit:\n" + authUrl + "\n");
   openUrl(authUrl);
 
-  const code = await waitForCode(state);
+  const code = await waitForCode(state, redirect);
   console.log("Got authorization code, exchanging for tokens...");
 
-  const tokens = await exchangeCode(client.clientId, client.clientSecret, code);
+  const tokens = await exchangeCode(client.clientId, client.clientSecret, code, redirect.uri);
   if (!tokens.refresh_token) {
     console.error("\nNo refresh_token returned. This usually means you've authorized this");
     console.error("client before. Revoke at https://myaccount.google.com/permissions");
