@@ -709,6 +709,7 @@ function gatherSessions() {
     const cwd = platform.processCwd(root.pid);
     let worktree = false;
     let project = null;
+    let rel = null;
     if (cwd) {
       try {
         const gitDir = execSync(`git -C "${cwd}" rev-parse --git-dir`, {
@@ -719,6 +720,8 @@ function gatherSessions() {
           encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
         }).trim();
         project = path.basename(top);
+        // Repo-relative path: "pivi" at the root, "pivi/gateway" below it.
+        rel = project + cwd.slice(top.length);
       } catch {}
     }
 
@@ -729,7 +732,7 @@ function gatherSessions() {
 
     return {
       pid: root.pid,
-      cwd, cwd_short, project,
+      cwd, cwd_short, project, rel,
       worktree,
       subagents,
       proc_count: tree.length,

@@ -107,21 +107,25 @@ function renderPeerRow(p) {
       }, "×")
     : null;
 
-  const cls = "peer-row" + (p.is_manual ? " manual" : "");
+  const cls = "tcard tcard-peer" + (p.is_manual ? " manual" : "");
+  const card = (variant, ...body) =>
+    el("div", { class: cls + (variant ? " " + variant : "") },
+      el("div", { class: "tcard-accent" }),
+      el("div", { class: "tcard-body" }, ...body),
+      removeBtn,
+    );
 
   if (!p.online) {
-    return el("div", { class: cls + " offline" }, head,
+    return card("offline", head,
       el("div", { class: "peer-note" }, p.is_manual && p.fetch_error
         ? `unreachable · ${p.fetch_error}`
         : "offline · last seen " + fmtAgo(p.last_seen)),
-      removeBtn,
     );
   }
   if (!p.snapshot) {
-    return el("div", { class: cls + " stale" }, head,
+    return card("stale", head,
       el("div", { class: "peer-note" },
         p.fetch_error ? `presence agent: ${p.fetch_error}` : "no presence agent on :5176"),
-      removeBtn,
     );
   }
   const s = p.snapshot;
@@ -139,7 +143,7 @@ function renderPeerRow(p) {
   const loadTxt = typeof s.load_1m === "number" ? s.load_1m.toFixed(2) : "—";
   const memTxt  = s.mem_pct != null ? `${s.mem_pct}%` : "—";
 
-  return el("div", { class: cls + (p.is_self ? " self" : "") },
+  return card(p.is_self ? "self" : "",
     head,
     el("div", { class: "peer-grid" },
       el("div", { class: "peer-cell" },
@@ -163,7 +167,6 @@ function renderPeerRow(p) {
         el("span", { class: "peer-val claude-procs" }, `${claudeRunning} running`),
       ),
     ),
-    removeBtn,
   );
 }
 
@@ -247,45 +250,41 @@ function renderSessions(state) {
   }
 
   sessions.forEach((s, i) => {
-    const label = s.cwd_short
-      ? (s.project ? `${s.project}  ${s.cwd_short.split("/").slice(-1)[0]}` : s.cwd_short)
-      : `pid ${s.pid}`;
-    const tags = [];
-    if (s.worktree)    tags.push(el("span", { class: "session-tag wt"  }, "⌥ worktree"));
-    if (s.subagents)   tags.push(el("span", { class: "session-tag sub" }, `${s.subagents} sub`));
-    tags.push(el("span", { class: "session-tag" }, `pid ${s.pid}`));
+    const title = s.rel || s.cwd_short || `pid ${s.pid}`;
+    const badges = [];
+    if (s.worktree)  badges.push(el("span", { class: "tcard-badge warn" }, "worktree"));
+    if (s.subagents) badges.push(el("span", { class: "tcard-badge info" }, `${s.subagents} sub`));
+    badges.push(el("span", { class: "tcard-badge mute" }, `pid ${s.pid}`));
 
     list.appendChild(
-      el("div", { class: "session-row" + (s.worktree ? " worktree" : "") },
-        el("div", { class: "session-head" },
-          el("span", { class: "session-swatch" + (i % 2 === 1 ? " alt" : "") }),
-          el("span", { class: "session-cwd", title: s.cwd || "" }, label),
-          el("span", { class: "session-rss" }, fmtBytes(s.rss_kb)),
+      el("div", {
+        class: "tcard tcard-session" + (i % 2 === 1 ? " alt" : "") + (s.worktree ? " worktree" : ""),
+      },
+        el("div", { class: "tcard-accent" }),
+        el("div", { class: "tcard-body" },
+          el("div", { class: "tcard-head" },
+            el("span", { class: "tcard-title", title: s.cwd || "" }, title),
+            el("span", { class: "tcard-value" }, fmtBytes(s.rss_kb)),
+          ),
+          el("div", { class: "tcard-badges" }, ...badges),
         ),
-        el("div", { class: "session-meta" }, ...tags),
       )
     );
   });
 
-  // legend: other + free
-  list.appendChild(
-    el("div", { class: "session-row legend" },
-      el("div", { class: "session-head" },
-        el("span", { class: "session-swatch other" }),
-        el("span", { class: "session-cwd" }, "other processes"),
-        el("span", { class: "session-rss" }, fmtBytes(otherKb)),
+  // legend: other + free (no accent bar — they are not sessions)
+  const legendRow = (swatch, name, kb) =>
+    el("div", { class: "tcard tcard-legend" },
+      el("div", { class: "tcard-body" },
+        el("div", { class: "tcard-head" },
+          el("span", { class: "session-swatch " + swatch }),
+          el("span", { class: "tcard-title mute" }, name),
+          el("span", { class: "tcard-value mute" }, fmtBytes(kb)),
+        ),
       ),
-    )
-  );
-  list.appendChild(
-    el("div", { class: "session-row legend" },
-      el("div", { class: "session-head" },
-        el("span", { class: "session-swatch free" }),
-        el("span", { class: "session-cwd" }, "free"),
-        el("span", { class: "session-rss" }, fmtBytes(freeKb)),
-      ),
-    )
-  );
+    );
+  list.appendChild(legendRow("other", "other processes", otherKb));
+  list.appendChild(legendRow("free", "free", freeKb));
 }
 
 function renderCalendar(cal) {
