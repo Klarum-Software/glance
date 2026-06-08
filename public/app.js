@@ -5,17 +5,18 @@ const REFRESH_MS = 30_000;
 const TODAY      = new Date().toISOString().slice(0, 10);
 const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
 
+const TERM_POLL_MS  = 1200;
+
 const GUTTER_PX     = 6;
 const COL_MIN_PX    = 160;
 const COL_WIDTH_KEY = (name) => `glance.colwidth.${name}`;
-// Default fr values. Tuned to match the wider, more balanced original
-// glance-ui layout (see Screenshot 2 in the v0.1.0 handoff notes).
+// Default fr values. The terminal is the centerpiece of the control center, so
+// it gets the most room; mail (calendar + inbox) sits on the right.
 const COL_DEFAULTS = {
-  remote:   3.4,
-  sessions: 1.9,
-  linear:   2.7,
-  calendar: 1.6,
-  inbox:    2.4,
+  remote:   2.6,
+  sessions: 1.6,
+  terminal: 4.2,
+  mail:     2.6,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -295,38 +296,11 @@ function renderSessions(state) {
   );
 }
 
-function renderLinear(lin) {
-  const list = $("linear-list");
-  list.replaceChildren();
-  $("linear-meta").textContent = `· ${lin.total} open · ${lin.overdue} overdue`;
-  if (!lin.items.length) {
-    list.appendChild(el("li", { class: "empty" }, "nothing assigned"));
-    return;
-  }
-  for (const i of lin.items) {
-    const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";
-    const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
-    list.appendChild(
-      el("li", {
-        class: "clickable",
-        title: i.title,
-        on: { click: () => postAction("/api/open", { url: i.url }).then(() => toast(`opened ${i.identifier}`)) },
-      },
-        el("span", { class: "li-id" }, i.identifier),
-        el("span", { class: "li-prio " + pClass }, pLabel),
-        el("span", { class: "li-state" }, i.state_name || ""),
-        el("span", { class: "li-due " + (i.overdue ? "overdue" : "") }, i.due_date ? i.due_date.slice(5) : ""),
-        el("span", { class: "li-title" }, i.title || ""),
-      )
-    );
-  }
-}
-
 function renderCalendar(cal) {
   const list = $("calendar-list");
   list.replaceChildren();
   if (!cal.authed) {
-    list.appendChild(el("li", { class: "empty" }, "not authed — run: node lib/calendar.js auth"));
+    list.appendChild(el("li", { class: "empty" }, "not authed — run: node server/bin/google-auth.js --calendar"));
     $("calendar-meta").textContent = "";
     return;
   }
@@ -377,7 +351,7 @@ function fmtMeetingStart(start) {
   return start;
 }
 
-let INBOX_SETTINGS = { snippets: {}, has_linear: false, has_summarizer: false };
+let INBOX_SETTINGS = { snippets: {}, has_summarizer: false };
 let INBOX_SEARCH_ACTIVE = false;
 let LAST_LIVE_INBOX = null;
 
@@ -393,9 +367,6 @@ function renderInboxItem(m) {
     el("button", { class: "btn btn-xs", "data-act": "reply",     "data-id": m.id }, "reply"),
     el("button", { class: "btn btn-xs", "data-act": "archive",   "data-id": m.id }, "archive"),
   ];
-  if (INBOX_SETTINGS.has_linear) {
-    actions.splice(3, 0, el("button", { class: "btn btn-xs", "data-act": "to-linear", "data-id": m.id, title: "create Linear issue" }, "linear"));
-  }
 
   return el("li", {
     class: "inbox-row" + (m.is_team ? " team" : ""),
@@ -450,10 +421,199 @@ function render(state) {
   renderServices(state.services || {});
   renderRemote(state.remote);
   renderSessions(state);
-  renderLinear(state.linear);
+  renderTerminalTabs(state.tmux);
   renderCalendar(state.calendar);
   LAST_LIVE_INBOX = state.inbox;
   if (!INBOX_SEARCH_ACTIVE) renderInbox(state.inbox);
+}
+
+// ── terminal (tmux poll) ───────────────────────────────────────────────────
+// Poll-based, no streaming: render the window list as clickable tabs, and on a
+// short interval capture the selected window's visible pane and paint it. Key
+// presses inside the screen are forwarded to tmux via /api/tmux/send, then we
+// re-capture quickly so typing feels responsive.
+
+const TERM = { window: null, exists: false, polling: false, lastContent: null };
+
+// SGR colorizer for `tmux capture-pane -e` output. We render to spans with
+// inline styles; standard xterm palette so claude's TUI looks like it does in
+// a real terminal. Anything we don't recognize is dropped, never emitted raw.
+const ANSI_16 = [
+  "#1a1a1d", "#ef7972", "#5ab67d", "#e8a23d", "#6aa3ff", "#c98bdb", "#54c7c7", "#b6b6b1",
+  "#5e5f63", "#ff9b94", "#7fd49a", "#f2bf6a", "#93bdff", "#dca8e8", "#7adada", "#f4f4f0",
+];
+function ansi256(n) {
+  if (n < 16) return ANSI_16[n];
+  if (n < 232) {
+    n -= 16;
+    const f = (x) => { const v = x === 0 ? 0 : 55 + x * 40; return v.toString(16).padStart(2, "0"); };
+    return `#${f(Math.floor(n / 36))}${f(Math.floor(n / 6) % 6)}${f(n % 6)}`;
+  }
+  const v = (8 + (n - 232) * 10).toString(16).padStart(2, "0");
+  return `#${v}${v}${v}`;
+}
+const escHtml = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function ansiToHtml(text) {
+  let fg = null, bg = null, bold = false, inverse = false, out = "", openSpan = false;
+  const closeSpan = () => { if (openSpan) { out += "</span>"; openSpan = false; } };
+  const openStyled = () => {
+    let f = fg, b = bg;
+    if (inverse) { f = bg || "var(--paper)"; b = fg || "var(--ink)"; }
+    const styles = [];
+    if (f) styles.push(`color:${f}`);
+    if (b) styles.push(`background:${b}`);
+    if (bold) styles.push("font-weight:600");
+    if (!styles.length) return;
+    out += `<span style="${styles.join(";")}">`;
+    openSpan = true;
+  };
+  // Split on CSI sequences, keeping the codes.
+  const parts = text.split(/\x1b\[([0-9;]*)m/);
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      if (!parts[i]) continue;
+      closeSpan();
+      openStyled();
+      out += escHtml(parts[i]);
+    } else {
+      const codes = parts[i].split(";").map(Number);
+      for (let j = 0; j < codes.length; j++) {
+        const c = codes[j];
+        if (c === 0 || Number.isNaN(c)) { fg = bg = null; bold = false; inverse = false; }
+        else if (c === 1) bold = true;
+        else if (c === 22) bold = false;
+        else if (c === 7) inverse = true;
+        else if (c === 27) inverse = false;
+        else if (c === 39) fg = null;
+        else if (c === 49) bg = null;
+        else if (c >= 30 && c <= 37) fg = ANSI_16[c - 30];
+        else if (c >= 90 && c <= 97) fg = ANSI_16[c - 90 + 8];
+        else if (c >= 40 && c <= 47) bg = ANSI_16[c - 40];
+        else if (c >= 100 && c <= 107) bg = ANSI_16[c - 100 + 8];
+        else if (c === 38 || c === 48) {
+          const target = c === 38;
+          if (codes[j + 1] === 5) { const col = ansi256(codes[j + 2]); target ? (fg = col) : (bg = col); j += 2; }
+          else if (codes[j + 1] === 2) { const col = `rgb(${codes[j+2]||0},${codes[j+3]||0},${codes[j+4]||0})`; target ? (fg = col) : (bg = col); j += 4; }
+        }
+      }
+    }
+  }
+  closeSpan();
+  return out;
+}
+
+function renderTerminalTabs(tmux) {
+  const tabs = $("term-tabs");
+  const meta = $("terminal-meta");
+  const hint = $("term-hint");
+  if (!tabs) return;
+  tabs.replaceChildren();
+  TERM.exists = !!(tmux && tmux.exists);
+
+  if (!tmux || !tmux.exists) {
+    meta.textContent = tmux && tmux.session ? `· no session "${tmux.session}"` : "· tmux idle";
+    hint.textContent = tmux && tmux.error ? tmux.error : `start it with: tmux new -s ${tmux?.session || "main"}`;
+    $("term-screen").replaceChildren();
+    TERM.window = null;
+    return;
+  }
+
+  const wins = tmux.windows || [];
+  meta.textContent = `· ${tmux.session} · ${wins.length} win`;
+  const activeWin = wins.find(w => w.active);
+  // Default selection to whatever tmux itself has active.
+  if (TERM.window == null || !wins.some(w => w.index === TERM.window)) {
+    TERM.window = activeWin ? activeWin.index : (wins[0] ? wins[0].index : null);
+  }
+  for (const w of wins) {
+    const sel = w.index === TERM.window;
+    tabs.appendChild(el("button", {
+      class: "term-tab" + (sel ? " selected" : "") + (w.active ? " active" : ""),
+      title: `${w.cwd_short || ""} · ${w.command}`,
+      on: { click: () => selectTerminalWindow(w.index) },
+    },
+      el("span", { class: "term-tab-idx" }, String(w.index)),
+      el("span", { class: "term-tab-name" }, w.name || w.command || "shell"),
+    ));
+  }
+  hint.textContent = "click the screen and type — keys go straight to tmux";
+  captureTerminal();
+}
+
+async function selectTerminalWindow(index) {
+  TERM.window = index;
+  TERM.lastContent = null;
+  renderTerminalTabsSelection();
+  try { await postAction("/api/tmux/select", { window: index }); } catch {}
+  captureTerminal();
+  $("term-screen").focus();
+}
+
+function renderTerminalTabsSelection() {
+  for (const tab of document.querySelectorAll(".term-tab")) {
+    const idx = Number(tab.querySelector(".term-tab-idx").textContent);
+    tab.classList.toggle("selected", idx === TERM.window);
+  }
+}
+
+async function captureTerminal() {
+  if (TERM.window == null || !TERM.exists) return;
+  try {
+    const r = await fetch(`/api/tmux/capture?window=${TERM.window}`, { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok || j.window !== TERM.window) return;
+    // Trim trailing blank lines so the prompt sits at the bottom, not buried.
+    const content = (j.content || "").replace(/\n+$/g, "");
+    if (content === TERM.lastContent) return;
+    TERM.lastContent = content;
+    const screen = $("term-screen");
+    const atBottom = screen.scrollTop + screen.clientHeight >= screen.scrollHeight - 8;
+    screen.innerHTML = ansiToHtml(content);
+    if (atBottom) screen.scrollTop = screen.scrollHeight;
+  } catch {}
+}
+
+async function sendTerminal(payload) {
+  if (TERM.window == null || !TERM.exists) return;
+  try {
+    await fetch("/api/tmux/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ window: TERM.window, ...payload }),
+    });
+    // Re-capture quickly for a responsive echo, on top of the steady poll.
+    setTimeout(captureTerminal, 60);
+  } catch {}
+}
+
+// Translate a keydown into a tmux send-keys payload. Printable characters go as
+// literal text; everything else maps to a tmux key name (or is ignored).
+const TERM_KEYMAP = {
+  Enter: "Enter", Tab: "Tab", Escape: "Escape", Backspace: "BSpace",
+  ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+  Delete: "DC", Insert: "IC",
+};
+function onTerminalKeydown(ev) {
+  if (TERM.window == null || !TERM.exists) return;
+  const k = ev.key;
+  // Let browser shortcuts (copy/paste/devtools) through unless it's a control
+  // combo we forward to the shell.
+  if (ev.metaKey) return;
+  if (ev.ctrlKey && k.length === 1 && /[a-z0-9]/i.test(k)) {
+    ev.preventDefault();
+    sendTerminal({ key: `C-${k.toLowerCase()}` });
+    return;
+  }
+  if (TERM_KEYMAP[k]) { ev.preventDefault(); sendTerminal({ key: TERM_KEYMAP[k] }); return; }
+  if (k.length === 1 && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); sendTerminal({ text: k }); return; }
+}
+
+async function pasteTerminal(ev) {
+  if (TERM.window == null || !TERM.exists) return;
+  const text = (ev.clipboardData || window.clipboardData)?.getData("text");
+  if (text) { ev.preventDefault(); sendTerminal({ text }); }
 }
 
 // ── resizable columns ─────────────────────────────────────────────────────
@@ -616,16 +776,6 @@ async function runAction(action) {
       const state = await postAction("/api/refresh");
       render(state);
       toast("refreshed");
-    } else if (action === "sync-linear") {
-      toast("syncing linear…");
-      const r = await postAction("/api/sync-linear");
-      toast(r.ok ? "linear synced" : `sync failed: ${r.error || r.status}`);
-      reload();
-    } else if (action === "launch-claude") {
-      const r = await postAction("/api/launch-claude");
-      toast(r.ok ? `claude launched · ${r.cwd}` : `launch failed: ${r.error}`);
-      // Give the new process ~1.5s to appear in ps, then refresh sessions.
-      setTimeout(reload, 1500);
     }
   } catch (e) {
     toast("error: " + e.message, 4000);
@@ -692,13 +842,6 @@ async function inboxAction(id, act) {
         body: "",
         reply_to_id: id,
       });
-    } else if (act === "to-linear") {
-      toast("creating Linear issue…");
-      const r = await fetch(`/api/inbox/${encodeURIComponent(id)}/to-linear`, { method: "POST" });
-      const j = await r.json().catch(() => ({}));
-      if (!j.ok) return toast("linear failed: " + (j.error || r.status), 4000);
-      toast(`created ${j.identifier}`);
-      window.open(j.url, "_blank", "noopener");
     }
   } catch (e) {
     toast("error: " + e.message, 4000);
@@ -801,6 +944,19 @@ $("compose-form")?.addEventListener("submit", async (ev) => {
   }
 });
 
+// ── terminal wiring ─────────────────────────────────────────────────────────
+
+$("term-screen")?.addEventListener("keydown", onTerminalKeydown);
+$("term-screen")?.addEventListener("paste", pasteTerminal);
+$("terminal-new")?.addEventListener("click", async () => {
+  try {
+    const r = await postAction("/api/tmux/new-window");
+    if (!r.ok) return toast("new window failed: " + (r.error || ""), 3000);
+    TERM.window = null;            // adopt the freshly created (now active) window
+    reload();
+  } catch (e) { toast("error: " + e.message, 3000); }
+});
+
 initResizableColumns();
 
 // ── main loop ─────────────────────────────────────────────────────────────
@@ -818,6 +974,10 @@ async function reload() {
 loadInboxSettings();
 reload();
 setInterval(reload, REFRESH_MS);
+
+// Faster, lighter poll just for the focused tmux pane so typing feels live
+// without dragging the whole /api/state cycle down to 1s.
+setInterval(() => { if (!document.hidden) captureTerminal(); }, TERM_POLL_MS);
 
 // 1s clock tick so the time looks alive between full reloads
 setInterval(() => renderClock(new Date().toISOString()), 1000);

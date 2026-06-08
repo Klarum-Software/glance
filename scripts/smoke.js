@@ -58,8 +58,13 @@ async function main() {
     console.log("state: ", s.status, "platform=" + (s.json?.platform || "?"),
                 "services=" + JSON.stringify(s.json?.services || {}),
                 "sessions=" + (s.json?.sessions?.length ?? "?"),
-                "linear=" + (s.json?.linear?.total ?? "?"));
+                "tmux=" + (s.json?.tmux?.exists ? `${s.json.tmux.windows.length} win` : "idle"));
     if (s.status !== 200) failed++;
+
+    const t = await get("/api/tmux");
+    console.log("tmux:  ", t.status, "session=" + (t.json?.session || "?"),
+                "exists=" + (t.json?.exists ?? "?"));
+    if (t.status !== 200 || !t.json?.ok) failed++;
   } catch (e) {
     console.error("test error:", e.message);
     failed++;

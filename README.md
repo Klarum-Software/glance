@@ -5,7 +5,7 @@
 <h1 align="center">GLANCE</h1>
 
 <p align="center">
-  <b>GNOME Shell extension & operator dashboard</b>
+  <b>Single-screen operator control center</b>
 </p>
 
 <p align="center">
@@ -18,12 +18,15 @@
 </p>
 
 ---
-Adds a top-panel button that drops down a single-screen
-operator dashboard: tailnet peers, local claude sessions, Linear queue, and
-calendar.
+A single-screen operator control center: tailnet peers, local claude
+sessions, a click-through tmux web terminal, and calendar plus inbox. It
+runs as a GNOME top-panel dropdown on Linux and as a browser dashboard
+anywhere (the primary surface on the mac mini, reached over the tailnet).
 
-The extension spawns and supervises a small Node.js backend on
-`127.0.0.1:5175`. There is nothing to autostart.
+Both front ends share one small Node.js backend on port `5172`. On GNOME
+the extension spawns and supervises it; elsewhere you run `node
+server/server.js`. There is nothing else to autostart. `5172` stays clear
+of the dev worktree port ranges (frontends on 5173+N, backends on 8000+N).
 
 ## Install
 
@@ -48,36 +51,34 @@ A dot appears in the top panel. Click it for the dashboard.
 
 ```json
 {
-  "port": 5175,
+  "port": 5172,
+  "host": "tailscale",
+  "tmuxSession": "main",
   "inboxDir": "/home/you/claude-inbox",
   "calendarBin": "/home/you/repos/glance/server/bin/gcal.js",
-  "linearApiKey": "lin_api_...",
-  "services": ["orchestrator", "inbox-ui", "work-tmux"],
-  "meEmails": ["you@example.com"]
+  "gmailBin": "/home/you/repos/glance/server/bin/gmail.js",
+  "services": ["orchestrator", "inbox-ui", "work-tmux"]
 }
 ```
 
-Every field is also overridable via env (`GLANCE_PORT`, `GLANCE_INBOX`,
-`GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_GMAIL_MAX_UNREAD`,
-`GLANCE_LINEAR_SYNC`, `GLANCE_LINEAR_API_KEY`, `GLANCE_SERVICES`,
-`GLANCE_ME_EMAILS`). See `server/config.js`.
+`host` defaults to `127.0.0.1`; set it to `"tailscale"` to bind this
+machine's tailnet IPv4 so you can open the dashboard from another tailnet
+machine (and nowhere else). Every field is also overridable via env
+(`GLANCE_PORT`, `GLANCE_HOST`, `GLANCE_TMUX_SESSION`, `GLANCE_INBOX`,
+`GLANCE_CALENDAR_BIN`, `GLANCE_GMAIL_BIN`, `GLANCE_SERVICES`). See
+`server/config.js`.
 
 ## Connecting your accounts
 
-### Linear
+### Terminal
 
-Create a personal API key at <https://linear.app/settings/api> (Personal
-API keys -> Create key). Paste it into `linearApiKey` in
-`~/.config/glance/config.json` (or export `GLANCE_LINEAR_API_KEY`).
-
-The backend's `POST /api/sync-linear` will fetch your assigned, non-closed
-issues directly from the Linear GraphQL API and cache them under
-`<inboxDir>/.linear-cache/`. Click the sync button in the LINEAR column
-header to refresh on demand.
-
-If you'd rather sync via an external service (e.g. inbox-ui), set
-`linearSyncUrl` instead. `linearApiKey` takes precedence when both are
-set.
+The TERMINAL column drives the tmux session named by `tmuxSession`
+(default `main`). It lists the session's windows as tabs; click one to
+switch to it (the change follows through to any attached `mosh`/`tmux`
+client), then click the screen and type. Keystrokes are forwarded with
+`tmux send-keys` and the visible pane is polled with `capture-pane`, so
+there is no `Ctrl+b` and no PTY. Start a session with `tmux new -s main`
+on the host running the backend.
 
 ### Calendar
 
@@ -119,9 +120,9 @@ credentials). Full walkthrough:
 Gmail shares the same OAuth client as Calendar (one consent, one token).
 Run `node server/bin/google-auth.js --gmail` (or no flags for both
 scopes), then set `gmailBin` in `~/.config/glance/config.json` to the
-absolute path of `server/bin/gmail.js`. The INBOX widget is registered
-disabled-by-default; enable it from prefs or the in-dashboard edit mode.
-Sender/subject blacklist patterns keep the column focused. Full guide:
+absolute path of `server/bin/gmail.js`. Unread Gmail shows in the lower
+half of the MAIL column, under upcoming calendar events. Sender/subject
+blacklist patterns keep it focused. Full guide:
 [docs/GMAIL-SETUP.md](docs/GMAIL-SETUP.md).
 
 ## What it shows
@@ -130,9 +131,8 @@ Sender/subject blacklist patterns keep the column focused. Full guide:
 |----------|-------------------------------------------|
 | REMOTE   | `tailscale status --json` + `klarum-presence` agent on each peer (port 5176) |
 | SESSIONS | `ps`-derived `claude` process trees + RSS vs total RAM |
-| LINEAR   | `<inboxDir>/.linear-cache/*.json`         |
-| CALENDAR | `calendarBin` stdout (refreshed every 60s). For Google Calendar, see [docs/CALENDAR-SETUP.md](docs/CALENDAR-SETUP.md) |
-| INBOX    | `gmailBin` -- unread Gmail with blacklist filter (read/send/summarize/archive). See [docs/GMAIL-SETUP.md](docs/GMAIL-SETUP.md) |
+| TERMINAL | `tmux` windows of `tmuxSession` (`capture-pane` / `send-keys`), click to switch and type |
+| MAIL     | `calendarBin` upcoming events + `gmailBin` unread Gmail, in one column (read/send/summarize/archive). See [docs/CALENDAR-SETUP.md](docs/CALENDAR-SETUP.md) and [docs/GMAIL-SETUP.md](docs/GMAIL-SETUP.md) |
 
 ## Architecture
 

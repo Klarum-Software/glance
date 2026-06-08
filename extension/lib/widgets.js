@@ -181,30 +181,30 @@ function renderSessions(state) {
     return { meta, children };
 }
 
-// ── LINEAR ──────────────────────────────────────────────────────────────
+// ── TERMINAL (tmux windows) ───────────────────────────────────────────────
+// The extension is a read-at-a-glance surface, so this lists the configured
+// tmux session's windows and lets a click switch the active one. Full
+// interactive typing lives in the browser dashboard (the macmini control
+// center); St has no terminal emulator to drive a live pane.
 
-function renderLinear(state, opts) {
-    const lin = state.linear || { items: [] };
+function renderTerminal(state, opts) {
+    const tmux = state.tmux || {};
     const children = [];
-    if (!lin.items || !lin.items.length) {
-        children.push(emptyRow("nothing assigned"));
-        return { meta: `· ${lin.total || 0} open · ${lin.overdue || 0} overdue`, children };
+    if (!tmux.exists) {
+        children.push(emptyRow(tmux.session ? `no tmux session "${tmux.session}"` : "tmux idle"));
+        return { meta: tmux.session ? `· ${tmux.session}` : "", children };
     }
-    for (const i of lin.items) {
-        const row = new St.BoxLayout({ vertical: false, style_class: "glance-li", x_expand: true, x_align: Clutter.ActorAlign.FILL });
-        row.add_child(new St.Label({ text: i.identifier, style_class: "glance-li-id", y_align: Clutter.ActorAlign.CENTER }));
-        const pLabel = i.priority >= 1 && i.priority <= 4 ? `P${i.priority}` : "—";
-        const pClass = i.priority >= 1 && i.priority <= 4 ? `p${i.priority}` : "p3";
-        row.add_child(new St.Label({ text: pLabel, style_class: `glance-li-prio ${pClass}`, y_align: Clutter.ActorAlign.CENTER }));
-        row.add_child(new St.Label({ text: i.state_name || "", style_class: "glance-li-state", y_align: Clutter.ActorAlign.CENTER }));
-        const dueText = i.due_date ? i.due_date.slice(5) : "";
-        row.add_child(new St.Label({ text: dueText, style_class: "glance-li-due " + (i.overdue ? "overdue" : ""), y_align: Clutter.ActorAlign.CENTER }));
-        const title = new St.Label({ text: i.title || "", style_class: "glance-li-title", y_align: Clutter.ActorAlign.CENTER, x_expand: true });
-        title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        row.add_child(title);
-        children.push(clickableRow(row, () => opts.onOpenUrl && i.url && opts.onOpenUrl(i.url)));
+    const wins = tmux.windows || [];
+    for (const w of wins) {
+        const row = new St.BoxLayout({ vertical: false, style_class: "glance-term-win" + (w.active ? " active" : "") });
+        row.add_child(new St.Label({ text: String(w.index), style_class: "glance-term-idx", y_align: Clutter.ActorAlign.CENTER }));
+        const name = new St.Label({ text: w.name || w.command || "shell", style_class: "glance-term-name", y_align: Clutter.ActorAlign.CENTER, x_expand: true });
+        name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        row.add_child(name);
+        if (w.command) row.add_child(new St.Label({ text: w.command, style_class: "glance-term-cmd", y_align: Clutter.ActorAlign.CENTER }));
+        children.push(clickableRow(row, () => opts.onTmuxSelect && opts.onTmuxSelect(w.index)));
     }
-    return { meta: `· ${lin.total} open · ${lin.overdue} overdue`, children };
+    return { meta: `· ${tmux.session} · ${wins.length} win`, children };
 }
 
 // ── CALENDAR ────────────────────────────────────────────────────────────
@@ -301,6 +301,19 @@ function renderInbox(state, opts) {
     }
     const metaSuffix = inbox.important_only ? " important unread" : " unread";
     return { meta: `· ${inbox.unread_count}${metaSuffix}`, children };
+}
+
+// ── MAIL (calendar + inbox, both Google-backed) ───────────────────────────
+
+function renderMail(state, opts) {
+    const children = [];
+    const cal = renderCalendar(state);
+    const inb = renderInbox(state, opts);
+    children.push(new St.Label({ text: "CALENDAR" + (cal.meta ? "  " + cal.meta : ""), style_class: "glance-mail-subhead" }));
+    children.push(...cal.children);
+    children.push(new St.Label({ text: "INBOX" + (inb.meta ? "  " + inb.meta : ""), style_class: "glance-mail-subhead" }));
+    children.push(...inb.children);
+    return { meta: inb.meta, children };
 }
 
 // ── CUSTOM (user HTTP endpoints) ────────────────────────────────────────
@@ -404,9 +417,8 @@ function makeCodeBlock(text) {
 
 registerWidget({ id: "remote",   title: "REMOTE",   tagClass: "remote",   defaultWeight: 1, builtIn: true, render: renderRemote   });
 registerWidget({ id: "sessions", title: "SESSIONS", tagClass: "sessions", defaultWeight: 1, builtIn: true, render: renderSessions });
-registerWidget({ id: "linear",   title: "LINEAR",   tagClass: "linear",   defaultWeight: 2, builtIn: true, render: renderLinear   });
-registerWidget({ id: "calendar", title: "CALENDAR", tagClass: "calendar", defaultWeight: 1, builtIn: true, render: renderCalendar });
-registerWidget({ id: "inbox",    title: "INBOX",    tagClass: "inbox",    defaultWeight: 2, builtIn: true, render: renderInbox    });
+registerWidget({ id: "terminal", title: "TERMINAL", tagClass: "terminal", defaultWeight: 3, builtIn: true, render: renderTerminal });
+registerWidget({ id: "mail",     title: "MAIL",     tagClass: "mail",     defaultWeight: 2, builtIn: true, render: renderMail     });
 
 // Parse a JSON layout string, drop entries pointing at unknown widgets, and
 // append any registered widgets the saved layout doesn't mention (so a newly

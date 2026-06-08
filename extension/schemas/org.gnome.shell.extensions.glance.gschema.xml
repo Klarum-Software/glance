@@ -2,9 +2,9 @@
 <schemalist gettext-domain="glance">
   <schema id="org.gnome.shell.extensions.glance" path="/org/gnome/shell/extensions/glance/">
     <key name="backend-port" type="i">
-      <default>5175</default>
+      <default>5172</default>
       <summary>Backend HTTP port</summary>
-      <description>Port the glance Node.js backend listens on (127.0.0.1 only).</description>
+      <description>Port the glance Node.js backend listens on. 5172 stays clear of the dev worktree port ranges (5173+N frontends, 8000+N backends).</description>
     </key>
     <key name="backend-path" type="s">
       <default>""</default>
@@ -27,7 +27,7 @@
       <description>Width of the dashboard dropdown as a percentage of the monitor width. 30-100.</description>
     </key>
     <key name="widget-layout" type="s">
-      <default>'[{"id":"remote","enabled":true,"weight":1},{"id":"sessions","enabled":true,"weight":1},{"id":"linear","enabled":true,"weight":2},{"id":"calendar","enabled":true,"weight":1},{"id":"inbox","enabled":false,"weight":2}]'</default>
+      <default>'[{"id":"remote","enabled":true,"weight":1},{"id":"sessions","enabled":true,"weight":1},{"id":"terminal","enabled":true,"weight":3},{"id":"mail","enabled":true,"weight":2}]'</default>
       <summary>Widget layout (JSON)</summary>
       <description>Ordered list of dashboard widgets. Each entry: { id, enabled, weight }. Unknown ids are dropped on load; newly registered widgets are appended disabled. Edit via the extension prefs or in-dashboard edit mode.</description>
     </key>

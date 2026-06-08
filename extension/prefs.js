@@ -13,9 +13,8 @@ import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/
 const BUILTIN_WIDGETS = [
     { id: "remote",   title: "Remote / klarum-presence" },
     { id: "sessions", title: "Claude sessions"          },
-    { id: "linear",   title: "Linear queue"             },
-    { id: "calendar", title: "Calendar"                 },
-    { id: "inbox",    title: "Inbox (Gmail)"             },
+    { id: "terminal", title: "Terminal (tmux windows)"  },
+    { id: "mail",     title: "Mail (calendar + inbox)"  },
 ];
 
 function parseLayout(json) {

@@ -1,6 +1,6 @@
 # glance — Windows installer. Sets up the backend as a Scheduled Task that
 # runs at logon. There is no GNOME extension on Windows — the browser at
-# http://127.0.0.1:5175/ is the UI.
+# http://127.0.0.1:5172/ is the UI.
 
 $ErrorActionPreference = "Stop"
 
@@ -38,7 +38,7 @@ Start-ScheduledTask -TaskName $taskName
 Write-Host "  ✓ started"
 Write-Host ""
 Write-Host "next steps" -ForegroundColor White
-Write-Host "  • Open http://127.0.0.1:5175/ — the dashboard should be live."
+Write-Host "  • Open http://127.0.0.1:5172/ — the dashboard should be live."
 Write-Host "  • Manage: taskschd.msc (Task Scheduler)"
 Write-Host "  • Stop:   Stop-ScheduledTask -TaskName $taskName"
 Write-Host ""

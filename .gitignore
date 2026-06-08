@@ -9,6 +9,6 @@ dist/
 build/
 *.zip
 .cal-cache.json
-.linear-cache/
 .glance.pid
 .glance.sock
+.claude/

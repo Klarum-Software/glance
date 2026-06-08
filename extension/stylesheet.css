@@ -1,43 +1,43 @@
-/* glance extension stylesheet — Pivi design language inside gnome-shell. */
+/* glance extension stylesheet — Pivi dark design language inside gnome-shell.
+   Token values mirror pivi/frontend/src/app/globals.css .dark (St has no CSS
+   custom properties, so the hexes are inlined). */
 
 .glance-panel { spacing: 6px; }
 .glance-panel-label {
     font-size: 11px;
-    color: #e1e3e8;
+    color: #e6e6e2;
     font-feature-settings: "tnum";
 }
 .glance-dot {
-    color: #6ea8ff;
+    color: #ff5a4d;
     icon-size: 14px;
 }
-.glance-dot.online { color: #5fc26d; }
-.glance-dot.offline { color: #82868f; }
-.glance-dot.warn { color: #ff5f56; }
+.glance-dot.online { color: #5ab67d; }
+.glance-dot.offline { color: #88898d; }
+.glance-dot.warn { color: #e8a23d; }
 
 /* ── dropdown menu container ───────────────────────────────────────── */
 
 .glance-menu {
-    background-color: #0d0f12;
-    border: 1px solid #262a31;
+    background-color: #0d0d10;
+    border: 1px solid #2a2a2f;
     border-radius: 6px;
     padding: 0;
-    color: #e1e3e8;
+    color: #e6e6e2;
 }
 .glance-menu-item { padding: 0; }
 .glance-menu-item:hover, .glance-menu-item:focus, .glance-menu-item:active { background: transparent; }
 
-.glance-dashboard {
-    spacing: 0;
-}
+.glance-dashboard { spacing: 0; }
 
 .glance-placeholder {
-    color: #82868f;
+    color: #88898d;
     font-style: italic;
     padding: 24px;
     text-align: center;
 }
 .glance-error {
-    color: #ff5f56;
+    color: #ef7972;
     padding: 20px;
     text-align: center;
     font-size: 12px;
@@ -46,8 +46,8 @@
 /* ── topbar ─────────────────────────────────────────────────────────── */
 
 .glance-topbar {
-    background-color: #15181d;
-    border-bottom: 1px solid #262a31;
+    background-color: #18181c;
+    border-bottom: 1px solid #2a2a2f;
     padding: 6px 12px;
     spacing: 16px;
     min-height: 28px;
@@ -55,65 +55,64 @@
 .glance-brand { spacing: 8px; }
 .glance-brand-dot {
     width: 8px; height: 8px;
-    background-color: #6ea8ff;
+    background-color: #ff5a4d;
     border-radius: 4px;
 }
 .glance-brand-name {
-    color: #e1e3e8;
+    color: #f4f4f0;
     font-weight: bold;
     font-size: 12px;
 }
 .glance-brand-time {
-    color: #82868f;
+    color: #88898d;
     font-size: 11px;
     font-feature-settings: "tnum";
     padding-left: 8px;
 }
 .glance-tools { spacing: 4px; padding-left: 12px; }
 .glance-tool-btn {
-    background-color: #1c1f25;
-    border: 1px solid #262a31;
+    background-color: #1f1f24;
+    border: 1px solid #2a2a2f;
     border-radius: 3px;
-    color: #e1e3e8;
+    color: #e6e6e2;
     font-size: 11px;
     padding: 2px 8px;
     min-width: 22px;
 }
-.glance-tool-btn:hover { background-color: #262a31; }
+.glance-tool-btn:hover { background-color: #2a2a2f; }
 
 .glance-services { spacing: 10px; }
 .glance-svc {
     spacing: 4px;
-    color: #82868f;
+    color: #88898d;
     font-size: 11px;
 }
 .glance-svc-dot {
     width: 7px; height: 7px;
     border-radius: 4px;
-    background-color: #82868f;
+    background-color: #88898d;
 }
-.glance-svc.active { color: #e1e3e8; }
+.glance-svc.active { color: #e6e6e2; }
 .glance-svc.active .glance-svc-dot {
-    background-color: #5fc26d;
-    box-shadow: 0 0 6px #5fc26d;
+    background-color: #5ab67d;
 }
-.glance-svc.inactive .glance-svc-dot { background-color: #ff5f56; }
+.glance-svc.inactive .glance-svc-dot { background-color: #ef7972; }
 
 /* ── columns ────────────────────────────────────────────────────────── */
 
 .glance-body {
-    background-color: #262a31;
+    background-color: #2a2a2f;
     spacing: 1px;
     padding: 0;
 }
 .glance-col {
-    background-color: #0d0f12;
+    background-color: #0d0d10;
     padding: 6px 10px 8px;
     min-width: 180px;
 }
 .glance-col-head { spacing: 6px; padding-bottom: 4px; }
 .glance-col.edit {
-    border: 1px dashed #4ec9b0;
+    border: 1px dashed #6aa3ff;
     border-radius: 4px;
 }
 .glance-col-ctrl { spacing: 2px; }
@@ -122,19 +121,19 @@
     font-size: 11px;
     font-weight: bold;
 }
-.glance-col-tag.tag-remote   { color: #4ec9b0; }
-.glance-col-tag.tag-sessions { color: #ff8a65; }
-.glance-col-tag.tag-linear   { color: #f2c94c; }
-.glance-col-tag.tag-calendar { color: #6cc04a; }
+.glance-col-tag.tag-remote   { color: #6aa3ff; }
+.glance-col-tag.tag-sessions { color: #ff5a4d; }
+.glance-col-tag.tag-terminal { color: #5ab67d; }
+.glance-col-tag.tag-mail     { color: #c98bdb; }
 .glance-col-meta {
-    color: #82868f;
+    color: #88898d;
     font-size: 10px;
 }
 .glance-col-scroll { }
 .glance-col-body { spacing: 2px; }
 
 .glance-empty {
-    color: #82868f;
+    color: #88898d;
     font-style: italic;
     font-size: 11px;
     padding: 4px 6px;
@@ -148,158 +147,139 @@
     padding: 0;
     border-radius: 3px;
 }
-.glance-row-btn:hover { background-color: #1c1f25; }
+.glance-row-btn:hover { background-color: #1f1f24; }
 
 /* ── peers ──────────────────────────────────────────────────────────── */
 
 .glance-peer {
     padding: 5px 8px;
-    border-left: 2px solid #4ec9b0;
-    background-color: rgba(78, 201, 176, 0.04);
+    border-left: 2px solid #6aa3ff;
+    background-color: #18181c;
     border-radius: 3px;
     spacing: 3px;
 }
-.glance-peer.self    { border-left: 2px solid #6ea8ff; }
-.glance-peer.offline { border-left: 2px solid #82868f; }
+.glance-peer.self    { border-left: 2px solid #6aa3ff; }
+.glance-peer.offline { border-left: 2px solid #88898d; background-color: transparent; }
 .glance-peer-head { spacing: 8px; }
-.glance-peer-dot { width: 7px; height: 7px; border-radius: 4px; background-color: #82868f; }
-.glance-peer-dot.online { background-color: #5fc26d; box-shadow: 0 0 5px #5fc26d; }
-.glance-peer-name { color: #4ec9b0; font-weight: bold; font-size: 12px; }
-.glance-peer.self    .glance-peer-name { color: #6ea8ff; }
-.glance-peer.offline .glance-peer-name { color: #82868f; }
-.glance-peer-os  { color: #82868f; font-size: 10px; }
-.glance-peer-ip  { color: #82868f; font-size: 10px; }
-.glance-peer-note   { color: #82868f; font-size: 11px; font-style: italic; padding-left: 14px; }
-.glance-peer-spark  { color: #4ec9b0; font-size: 11px; padding-left: 14px; font-feature-settings: "tnum"; }
-.glance-peer-tmux   { color: #e1e3e8; font-size: 11px; padding-left: 14px; }
-.glance-peer-agents { color: #ff8a65; font-size: 11px; padding-left: 14px; }
-.glance-peer-git    { color: #f2c94c; font-size: 11px; padding-left: 14px; }
-.glance-peer-idle   { color: #82868f; font-size: 10px; padding-left: 14px; }
+.glance-peer-dot { width: 7px; height: 7px; border-radius: 4px; background-color: #88898d; }
+.glance-peer-dot.online { background-color: #5ab67d; }
+.glance-peer-name { color: #f4f4f0; font-weight: bold; font-size: 12px; }
+.glance-peer.offline .glance-peer-name { color: #88898d; }
+.glance-peer-os  { color: #88898d; font-size: 10px; }
+.glance-peer-ip  { color: #88898d; font-size: 10px; }
+.glance-peer-note   { color: #88898d; font-size: 11px; font-style: italic; padding-left: 14px; }
+.glance-peer-spark  { color: #6aa3ff; font-size: 11px; padding-left: 14px; font-feature-settings: "tnum"; }
+.glance-peer-tmux   { color: #e6e6e2; font-size: 11px; padding-left: 14px; }
+.glance-peer-agents { color: #ff5a4d; font-size: 11px; padding-left: 14px; }
+.glance-peer-git    { color: #e8a23d; font-size: 11px; padding-left: 14px; }
+.glance-peer-idle   { color: #88898d; font-size: 10px; padding-left: 14px; }
 
 /* ── sessions ───────────────────────────────────────────────────────── */
 
 .glance-session {
     padding: 4px 6px;
-    border-left: 2px solid #ff8a65;
-    background-color: rgba(255, 138, 101, 0.05);
+    border-left: 2px solid #ff5a4d;
+    background-color: #18181c;
     border-radius: 3px;
     spacing: 2px;
 }
-.glance-session.worktree { border-left: 2px solid #f2a44c; background-color: rgba(242, 164, 76, 0.05); }
+.glance-session.worktree { border-left: 2px solid #e8a23d; }
 .glance-session-head { spacing: 6px; }
-.glance-session-cwd { color: #e1e3e8; font-size: 11px; }
-.glance-session-rss { color: #ff8a65; font-size: 11px; font-weight: bold; font-feature-settings: "tnum"; }
-.glance-session.worktree .glance-session-rss { color: #f2a44c; }
-.glance-session-meta { color: #82868f; font-size: 10px; padding-left: 14px; }
+.glance-session-cwd { color: #e6e6e2; font-size: 11px; }
+.glance-session-rss { color: #ff5a4d; font-size: 11px; font-weight: bold; font-feature-settings: "tnum"; }
+.glance-session.worktree .glance-session-rss { color: #e8a23d; }
+.glance-session-meta { color: #88898d; font-size: 10px; padding-left: 14px; }
 
-/* ── linear ─────────────────────────────────────────────────────────── */
+/* ── terminal (tmux windows) ────────────────────────────────────────── */
 
-.glance-li { spacing: 6px; padding: 2px 6px; }
-.glance-li-id    { color: #e1e3e8; font-size: 11px; min-width: 56px; }
-.glance-li-prio  { font-size: 10px; font-weight: bold; min-width: 16px; }
-.glance-li-prio.p1 { color: #ff5f56; }
-.glance-li-prio.p2 { color: #f2c94c; }
-.glance-li-prio.p3 { color: #82868f; }
-.glance-li-prio.p4 { color: #82868f; }
-.glance-li-state { color: #82868f; font-size: 10px; min-width: 64px; }
-.glance-li-due   { color: #82868f; font-size: 10px; min-width: 40px; font-feature-settings: "tnum"; }
-.glance-li-due.overdue { color: #ff5f56; font-weight: bold; }
-.glance-li-title { color: #e1e3e8; font-size: 11px; max-width: 320px; }
+.glance-term-win {
+    spacing: 8px;
+    padding: 3px 7px;
+    border-left: 2px solid #2a2a2f;
+    border-radius: 3px;
+}
+.glance-term-win.active {
+    border-left: 2px solid #5ab67d;
+    background-color: #18181c;
+}
+.glance-term-idx  { color: #88898d; font-size: 11px; font-weight: bold; min-width: 16px; }
+.glance-term-win.active .glance-term-idx { color: #5ab67d; }
+.glance-term-name { color: #e6e6e2; font-size: 11px; }
+.glance-term-cmd  { color: #88898d; font-size: 10px; }
 
-/* ── calendar ───────────────────────────────────────────────────────── */
+/* ── mail (calendar + inbox) ────────────────────────────────────────── */
 
+.glance-mail-subhead {
+    color: #5e5f63;
+    font-size: 9px;
+    font-weight: bold;
+    padding: 5px 2px 2px;
+}
 .glance-cal-day {
-    color: #82868f;
+    color: #88898d;
     font-size: 10px;
     padding: 4px 6px 0;
 }
 .glance-cal-event { spacing: 8px; padding: 2px 6px; }
-.glance-cal-time   { color: #e1e3e8; font-size: 11px; min-width: 40px; font-feature-settings: "tnum"; }
-.glance-cal-summary { color: #e1e3e8; font-size: 11px; }
-
-/* ── inbox ──────────────────────────────────────────────────────────── */
+.glance-cal-time   { color: #b6b6b1; font-size: 11px; min-width: 40px; font-feature-settings: "tnum"; }
+.glance-cal-summary { color: #e6e6e2; font-size: 11px; }
 
 .glance-inbox-row { spacing: 8px; padding: 2px 6px; }
-.glance-inbox-row.team { border-left: 2px solid #c084fc; padding-left: 4px; }
-.glance-inbox-from    { color: #82868f; font-size: 11px; min-width: 96px; max-width: 120px; }
-.glance-inbox-subject { color: #e1e3e8; font-size: 11px; }
-.glance-inbox-subject.has-meeting { color: #d1e3d0; }
+.glance-inbox-row.team { border-left: 2px solid #c98bdb; padding-left: 4px; }
+.glance-inbox-from    { color: #88898d; font-size: 11px; min-width: 96px; max-width: 120px; }
+.glance-inbox-subject { color: #e6e6e2; font-size: 11px; }
+.glance-inbox-subject.has-meeting { color: #f4f4f0; }
 
 /* ── pop-out window ─────────────────────────────────────────────────── */
 
 .glance-popout {
-    background-color: #0d0f12;
-    border: 1px solid #262a31;
+    background-color: #0d0d10;
+    border: 1px solid #2a2a2f;
     border-radius: 6px;
-    color: #e1e3e8;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    color: #e6e6e2;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 .glance-popout-head {
-    background-color: #15181d;
-    border-bottom: 1px solid #262a31;
+    background-color: #18181c;
+    border-bottom: 1px solid #2a2a2f;
     padding: 6px 12px;
     spacing: 8px;
     min-height: 24px;
 }
 .glance-popout-title {
-    color: #e1e3e8;
+    color: #f4f4f0;
     font-weight: bold;
     font-size: 12px;
 }
 .glance-popout-close {
     background-color: transparent;
-    color: #82868f;
+    color: #88898d;
     font-size: 12px;
     border: none;
     padding: 0 6px;
 }
-.glance-popout-close:hover { color: #ff5f56; }
-.glance-popout-body {
-    padding: 0;
-}
-.glance-custom-kv {
-    spacing: 8px;
-    padding: 2px 6px;
-}
-.glance-custom-key {
-    color: #82868f;
-    font-size: 10px;
-    min-width: 90px;
-}
-.glance-custom-val {
-    color: #e1e3e8;
-    font-size: 11px;
-}
-.glance-custom-list {
-    color: #e1e3e8;
-    font-size: 11px;
-    padding: 2px 6px;
-}
+.glance-popout-close:hover { color: #ef7972; }
+.glance-popout-body { padding: 0; }
+
+.glance-custom-kv { spacing: 8px; padding: 2px 6px; }
+.glance-custom-key { color: #88898d; font-size: 10px; min-width: 90px; }
+.glance-custom-val { color: #e6e6e2; font-size: 11px; }
+.glance-custom-list { color: #e6e6e2; font-size: 11px; padding: 2px 6px; }
 .glance-custom-raw {
-    color: #82868f;
+    color: #88898d;
     font-size: 10px;
     font-family: monospace;
     padding: 4px 6px;
 }
 .glance-popout-grip {
-    background-color: rgba(130, 134, 143, 0.45);
+    background-color: rgba(136, 137, 141, 0.45);
     border-top-left-radius: 10px;
     border-bottom-right-radius: 6px;
-    border-top: 1px solid rgba(225, 227, 232, 0.25);
-    border-left: 1px solid rgba(225, 227, 232, 0.25);
+    border-top: 1px solid rgba(230, 230, 226, 0.25);
+    border-left: 1px solid rgba(230, 230, 226, 0.25);
 }
-.glance-popout-grip:hover {
-    background-color: rgba(130, 134, 143, 0.85);
-}
-.glance-popout-edge-r {
-    background-color: transparent;
-}
-.glance-popout-edge-r:hover {
-    background-color: rgba(130, 134, 143, 0.45);
-}
-.glance-popout-edge-b {
-    background-color: transparent;
-}
-.glance-popout-edge-b:hover {
-    background-color: rgba(130, 134, 143, 0.45);
-}
+.glance-popout-grip:hover { background-color: rgba(136, 137, 141, 0.85); }
+.glance-popout-edge-r { background-color: transparent; }
+.glance-popout-edge-r:hover { background-color: rgba(136, 137, 141, 0.45); }
+.glance-popout-edge-b { background-color: transparent; }
+.glance-popout-edge-b:hover { background-color: rgba(136, 137, 141, 0.45); }
