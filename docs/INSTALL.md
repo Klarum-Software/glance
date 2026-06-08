@@ -74,6 +74,34 @@ Open <http://127.0.0.1:5172/> for the dashboard.
 
 To stop: `launchctl unload ~/Library/LaunchAgents/com.klarum.glance.plist`
 
+On the mac mini control center, set `"host": "tailscale"` in
+`~/.config/glance/config.json` so the backend binds this machine's tailnet
+IPv4 (resolved at startup via `tailscale ip -4`, nothing hardcoded) and the
+dashboard is reachable from your other tailnet machines. See the
+Configuration section in the README.
+
+Updating: `git pull` lands cleanly (glance writes only to `/tmp` and
+`~/.config`, never the repo), but the LaunchAgent keeps running the old code
+in memory until it is restarted. Restart it so pulled changes go live:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.klarum.glance
+```
+
+`kickstart -k` kills the running instance before relaunching, which avoids
+the `EADDRINUSE` restart loop you get if a second instance starts while the
+old one still holds port 5172. To make this automatic, drop a `post-merge`
+git hook in your clone that runs the same command, so every `git pull`
+restarts the backend onto the fresh tree:
+
+```sh
+# .git/hooks/post-merge  (chmod +x)
+#!/bin/sh
+[ "$(uname)" = "Darwin" ] || exit 0
+launchctl print "gui/$(id -u)/com.klarum.glance" >/dev/null 2>&1 \
+  && launchctl kickstart -k "gui/$(id -u)/com.klarum.glance"
+```
+
 ## Windows
 
 ```powershell
