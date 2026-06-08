@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # glance — macOS installer. Sets up the backend as a launchd LaunchAgent so
 # it auto-starts at login. There is no GNOME extension on macOS — the
-# browser at http://127.0.0.1:5175/ is the UI.
+# browser at http://127.0.0.1:5172/ is the UI.
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ green "  ✓ launchctl load $LABEL"
 
 echo
 bold "next steps"
-echo "  • Open http://127.0.0.1:5175/ — the dashboard should be live."
+echo "  • Open http://127.0.0.1:5172/ — the dashboard should be live."
 echo "  • Logs: /tmp/glance.out.log, /tmp/glance.err.log"
 echo "  • Stop: launchctl unload $PLIST_DST"
 echo

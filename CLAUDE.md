@@ -1,11 +1,18 @@
 # CLAUDE.md
 
-You are working on **glance**, a GNOME Shell extension that drops a
-single-screen operator dashboard (tailnet peers, claude sessions, Linear
-queue, calendar) from a top-panel button. The extension supervises a
-zero-deps Node.js backend at `127.0.0.1:5175`. A browser dashboard at the
-same URL exists for data-layer QA and non-GNOME users; treat it as a
-secondary surface, not a co-equal product.
+You are working on **glance**, a single-screen operator control center
+(tailnet peers, claude sessions, a tmux web terminal, calendar and inbox).
+It ships two front ends over one zero-deps Node.js backend on port `5172`:
+a GNOME Shell extension (top-panel button, Linux) and a browser dashboard.
+On the mac mini the backend runs locally and the browser dashboard is the
+primary surface, reached over the tailnet (set `host` to `tailscale`); the
+GNOME extension is the Linux surface against the same `/api/state`.
+
+The terminal column drives the configured tmux session (`tmuxSession`,
+default `main`) by polling `capture-pane` and posting `send-keys`, so you
+can click between windows and type without `Ctrl+b`. The backend stays on
+`5172` to keep clear of the dev worktree port ranges (frontends on 5173+N,
+backends on 8000+N).
 
 Repo: <https://github.com/Klarum-Software/glance>.
 
@@ -32,8 +39,13 @@ user asks "what's next for REMOTE."
 
 - **Zero npm deps in `server/`.** The appeal is "clone and run." Don't add
   any.
-- **All HTTP is `127.0.0.1`.** The backend only reaches the network via
-  local CLIs (`tailscale status --json`) or tailnet peers on port 5176.
+- **Bind localhost or the tailnet, never the open internet.** Default
+  `host` is `127.0.0.1`; `host: "tailscale"` resolves this machine's tailnet
+  IPv4 and binds only that (falling back to loopback if tailscale is down,
+  so a broken tailscale never widens exposure). The backend reaches the
+  network only via local CLIs (`tailscale status --json`, `tmux`) or tailnet
+  peers on port 5176. The terminal endpoints run shell input, so widening
+  the bind beyond the tailnet is off the table.
 - **No comments explaining WHAT.** Names cover that. Comments are for WHY:
   a hidden constraint, a workaround, a non-obvious invariant.
 - **Extension code is 4-space indent (GJS convention); server code is

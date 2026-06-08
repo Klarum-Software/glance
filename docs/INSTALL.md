@@ -46,11 +46,12 @@ gnome-extensions prefs glance@klarum-software.github.io
 
 ```json
 {
-  "inboxDir":      "/home/you/claude-inbox",
-  "calendarBin":   "/home/you/repos/noah-tools/lib/calendar.js",
-  "linearSyncUrl": "http://127.0.0.1:5174/api/linear/sync",
-  "services":      ["orchestrator", "inbox-ui", "work-tmux"],
-  "meEmails":      ["you@example.com"]
+  "host":        "tailscale",
+  "tmuxSession": "main",
+  "inboxDir":    "/home/you/claude-inbox",
+  "calendarBin": "/home/you/repos/glance/server/bin/gcal.js",
+  "gmailBin":    "/home/you/repos/glance/server/bin/gmail.js",
+  "services":    ["orchestrator", "inbox-ui", "work-tmux"]
 }
 ```
 
@@ -69,7 +70,7 @@ What it does:
    substituted from your repo location and node binary location.
 3. `launchctl load`s the agent — backend starts immediately and at every login.
 
-Open <http://127.0.0.1:5175/> for the dashboard.
+Open <http://127.0.0.1:5172/> for the dashboard.
 
 To stop: `launchctl unload ~/Library/LaunchAgents/com.klarum.glance.plist`
 
@@ -87,7 +88,7 @@ What it does:
 2. Registers a Scheduled Task `klarum-glance` that runs at logon.
 3. Starts the task immediately.
 
-Open <http://127.0.0.1:5175/> for the dashboard.
+Open <http://127.0.0.1:5172/> for the dashboard.
 
 To stop: `Stop-ScheduledTask -TaskName klarum-glance`
 To remove: `Unregister-ScheduledTask -TaskName klarum-glance -Confirm:$false`
@@ -98,7 +99,7 @@ To remove: `Unregister-ScheduledTask -TaskName klarum-glance -Confirm:$false`
 git clone https://github.com/Klarum-Software/glance.git ~/repos/glance
 cd ~/repos/glance
 node server/server.js &
-xdg-open http://127.0.0.1:5175/
+xdg-open http://127.0.0.1:5172/
 ```
 
 Add the `node server/server.js` invocation to whatever your DE uses for

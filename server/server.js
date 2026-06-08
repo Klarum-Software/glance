@@ -1,16 +1,21 @@
 #!/usr/bin/env node
-// glance — single-screen dashboard, localhost only.
+// glance — single-screen operator dashboard. Reachable on localhost and,
+// when host is "tailscale", on this machine's tailnet IP (and nowhere else).
 //
 //   GET    /                          index.html
 //   GET    /<static asset>            public/...
 //   GET    /api/state                 aggregated snapshot
 //   GET    /api/health                { ok, version, platform }
 //   POST   /api/refresh               invalidate caches, return new state
-//   POST   /api/sync-linear           proxy to configured linear sync endpoint
 //   POST   /api/open                  body: { url } — open in default handler
 //   GET    /api/config/peers          list manually-configured remote peers
 //   POST   /api/config/peers          body: { name, host, port? } — add peer
 //   DELETE /api/config/peers/:name    remove peer
+//   GET    /api/tmux                  list windows of the configured session
+//   GET    /api/tmux/capture?window=N current visible pane contents (ANSI)
+//   POST   /api/tmux/send             body: { window, text? , key? } — type
+//   POST   /api/tmux/select           body: { window } — switch active window
+//   POST   /api/tmux/new-window       body: { name? } — open a new window
 //
 // Zero npm deps. Cross-platform via server/platform/{linux,macos,windows}.js.
 
@@ -265,48 +270,105 @@ async function gatherRemote() {
   return { status: "ok", peers };
 }
 
-function gatherLinear(limit = 50) {
-  const dir = path.join(cfg.inboxDir, ".linear-cache");
-  let names;
-  try { names = fs.readdirSync(dir); } catch { return { total: 0, overdue: 0, items: [] }; }
-  const today = new Date().toISOString().slice(0, 10);
-  const items = [];
-  const meEmails = cfg.meEmails.map(e => e.toLowerCase());
-  for (const n of names) {
-    if (!n.endsWith(".json")) continue;
-    if (n === "cycles.json" || n === "milestones.json") continue;
-    let i;
-    try { i = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8")); } catch { continue; }
-    const email = i.assignee?.email?.toLowerCase();
-    if (meEmails.length && (!email || !meEmails.includes(email))) continue;
-    const t = i.state?.type;
-    if (t === "completed" || t === "canceled") continue;
-    items.push({
-      identifier: i.identifier,
-      title: i.title,
-      priority: i.priority ?? 0,
-      priority_label: i.priorityLabel,
-      state_name: i.state?.name,
-      state_type: i.state?.type,
-      state_color: i.state?.color,
-      project_name: i.project?.name,
-      project_color: i.project?.color,
-      due_date: i.dueDate,
-      url: i.url,
-      overdue: !!(i.dueDate && i.dueDate < today),
+// ── tmux web terminal ───────────────────────────────────────────────────────
+// Poll-based: list/capture over GET, drive over POST. No PTY, no streaming, no
+// deps — every operation is a single tmux invocation against the configured
+// session, args passed as argv so nothing reaches a shell. The window index is
+// the only caller-controlled value that becomes part of a target, so it is
+// constrained to a small integer.
+
+const WINDOW_IDX_RE = /^\d{1,3}$/;
+
+function tmuxRun(args, opts = {}) {
+  return new Promise((resolve) => {
+    const out = [], err = [];
+    const child = spawn(cfg.tmuxBin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    child.stdout.on("data", c => out.push(c));
+    child.stderr.on("data", c => err.push(c));
+    child.on("close", code => resolve({
+      ok: code === 0, code,
+      stdout: Buffer.concat(out).toString("utf8"),
+      stderr: Buffer.concat(err).toString("utf8"),
+    }));
+    child.on("error", e => resolve({ ok: false, code: -1, stdout: "", stderr: e.message }));
+    if (opts.stdin != null) { child.stdin.write(opts.stdin); child.stdin.end(); }
+    else child.stdin.end();
+  });
+}
+
+function tmuxTarget(window) {
+  return `${cfg.tmuxSession}:${window}`;
+}
+
+async function tmuxListWindows() {
+  const fmt = "#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}\t#{pane_current_command}\t#{pane_current_path}";
+  const r = await tmuxRun(["list-windows", "-t", cfg.tmuxSession, "-F", fmt]);
+  if (!r.ok) {
+    const missing = /can't find session|no server running|no current session/i.test(r.stderr);
+    return { ok: true, session: cfg.tmuxSession, exists: !missing && false, windows: [], error: r.stderr.trim() };
+  }
+  const home = process.env.HOME || "";
+  const windows = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const [index, name, active, panes, command, cwd] = line.split("\t");
+    windows.push({
+      index: Number(index),
+      name,
+      active: active === "1",
+      panes: Number(panes) || 1,
+      command: command || "",
+      cwd_short: cwd && home && cwd.startsWith(home) ? "~" + cwd.slice(home.length) : (cwd || ""),
     });
   }
-  items.sort((a, b) => {
-    const pa = a.priority === 0 ? 99 : a.priority;
-    const pb = b.priority === 0 ? 99 : b.priority;
-    if (pa !== pb) return pa - pb;
-    return (a.due_date || "9999").localeCompare(b.due_date || "9999");
-  });
-  return {
-    total: items.length,
-    overdue: items.filter(i => i.overdue).length,
-    items: items.slice(0, limit),
-  };
+  return { ok: true, session: cfg.tmuxSession, exists: true, windows };
+}
+
+async function tmuxCapture(window) {
+  if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  // -e keeps SGR escapes so the browser can colorize; -p writes to stdout;
+  // -J joins wrapped lines so the client sees logical rows.
+  const r = await tmuxRun(["capture-pane", "-ep", "-t", tmuxTarget(window)]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "capture failed", statusCode: 500 };
+  return { ok: true, window: Number(window), content: r.stdout };
+}
+
+// Keys that may be sent un-escaped (interpreted by tmux as named keys). Anything
+// not on this list must travel as literal text via `send-keys -l`, so a caller
+// can never smuggle an option or a second command into the argv.
+const TMUX_KEY_RE = /^(Enter|Tab|Escape|Space|BSpace|Up|Down|Left|Right|Home|End|PageUp|PageDown|Delete|IC|DC|F[1-9]|F1[0-2]|C-[a-z0-9]|M-[a-z0-9]|C-Up|C-Down|C-Left|C-Right)$/;
+
+async function tmuxSend(window, { text, key }) {
+  if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  const target = tmuxTarget(window);
+  let args;
+  if (typeof key === "string" && key.length) {
+    if (!TMUX_KEY_RE.test(key)) return { ok: false, error: "unsupported key", statusCode: 400 };
+    args = ["send-keys", "-t", target, key];
+  } else if (typeof text === "string") {
+    if (text.length > 4096) return { ok: false, error: "text too long", statusCode: 400 };
+    args = ["send-keys", "-t", target, "-l", "--", text];
+  } else {
+    return { ok: false, error: "text or key required", statusCode: 400 };
+  }
+  const r = await tmuxRun(args);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "send failed", statusCode: 500 };
+  return { ok: true };
+}
+
+async function tmuxSelect(window) {
+  if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  const r = await tmuxRun(["select-window", "-t", tmuxTarget(window)]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "select failed", statusCode: 500 };
+  return { ok: true };
+}
+
+async function tmuxNewWindow(name) {
+  const args = ["new-window", "-t", cfg.tmuxSession];
+  if (typeof name === "string" && /^[\w.\- ]{1,40}$/.test(name)) args.push("-n", name);
+  const r = await tmuxRun(args);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "new-window failed", statusCode: 500 };
+  return { ok: true };
 }
 
 function parseCalCache(text) {
@@ -618,11 +680,11 @@ function gatherSessions() {
 }
 
 async function gatherState() {
-  const [linear, calendar, remote, inbox] = await Promise.all([
-    Promise.resolve(gatherLinear()),
+  const [calendar, remote, inbox, tmux] = await Promise.all([
     gatherCalendar(),
     gatherRemote(),
     gatherInbox(),
+    tmuxListWindows(),
   ]);
   return {
     now: new Date().toISOString(),
@@ -632,7 +694,7 @@ async function gatherState() {
     memory: gatherMemory(),
     sessions: gatherSessions(),
     remote,
-    linear, calendar, inbox,
+    calendar, inbox, tmux,
     custom: snapshotCustom(),
   };
 }
@@ -805,106 +867,6 @@ async function actionRefresh() {
   return gatherState();
 }
 
-function syncLinearBuiltIn() {
-  return new Promise((resolve) => {
-    const query = JSON.stringify({
-      query: `{
-        issues(
-          filter: {
-            assignee: { isMe: { eq: true } }
-            state: { type: { nin: ["completed", "cancelled"] } }
-          }
-          first: 100
-        ) {
-          nodes {
-            id identifier title priority priorityLabel url dueDate
-            state { name type color }
-            project { name color }
-            assignee { email }
-          }
-        }
-      }`,
-    });
-
-    const opts = {
-      hostname: "api.linear.app",
-      path: "/graphql",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(query),
-        "authorization": cfg.linearApiKey,
-      },
-      timeout: 15000,
-    };
-
-    const req = https.request(opts, (r) => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        let body;
-        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
-        catch (e) { return resolve({ ok: false, error: "bad JSON: " + e.message }); }
-
-        if (body.errors) return resolve({ ok: false, error: body.errors[0]?.message || "GraphQL error" });
-
-        const issues = body.data?.issues?.nodes || [];
-        const dir = path.join(cfg.inboxDir, ".linear-cache");
-        try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-
-        // Remove stale issue files (leave cycles.json / milestones.json alone)
-        const incoming = new Set(issues.map(i => i.identifier + ".json"));
-        try {
-          for (const f of fs.readdirSync(dir)) {
-            if (f === "cycles.json" || f === "milestones.json") continue;
-            if (f.endsWith(".json") && !incoming.has(f)) {
-              try { fs.unlinkSync(path.join(dir, f)); } catch {}
-            }
-          }
-        } catch {}
-
-        for (const issue of issues) {
-          try {
-            fs.writeFileSync(
-              path.join(dir, issue.identifier + ".json"),
-              JSON.stringify(issue, null, 2) + "\n",
-              { mode: 0o600 }
-            );
-          } catch {}
-        }
-
-        resolve({ ok: true, synced: issues.length });
-      });
-    });
-
-    req.on("error", e => resolve({ ok: false, error: e.message }));
-    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
-    req.write(query);
-    req.end();
-  });
-}
-
-function actionSyncLinear() {
-  if (cfg.linearApiKey) return syncLinearBuiltIn();
-  return new Promise((resolve) => {
-    if (!cfg.linearSyncUrl) return resolve({ ok: false, error: "linearSyncUrl not configured" });
-    let url;
-    try { url = new URL(cfg.linearSyncUrl); } catch (e) { return resolve({ ok: false, error: "bad linearSyncUrl: " + e.message }); }
-    const req = http.request({
-      protocol: url.protocol, host: url.hostname, port: url.port || 80, path: url.pathname,
-      method: "POST", headers: { "content-length": 0 }, timeout: 5000,
-    }, r => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => resolve({ ok: r.statusCode === 200, status: r.statusCode,
-                                  body: Buffer.concat(chunks).toString("utf8") }));
-    });
-    req.on("error", e => resolve({ ok: false, error: e.message }));
-    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
-    req.end();
-  });
-}
-
 function validPeerInput(body) {
   if (!body || typeof body !== "object") return "missing body";
   const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -1019,93 +981,6 @@ async function actionInboxSearch(query, max) {
   return { ok: true, query: q, count: items.length, items };
 }
 
-let LINEAR_TEAM_CACHE = null;
-function linearGraphQL(query, variables) {
-  return new Promise((resolve, reject) => {
-    if (!cfg.linearApiKey) return reject(new Error("linearApiKey not configured"));
-    const body = JSON.stringify({ query, variables });
-    const req = https.request({
-      hostname: "api.linear.app",
-      path: "/graphql",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(body),
-        "authorization": cfg.linearApiKey,
-      },
-      timeout: 15000,
-    }, (r) => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        try {
-          const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          if (data.errors) return reject(new Error(data.errors[0]?.message || "GraphQL error"));
-          resolve(data.data);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on("error", reject);
-    req.on("timeout", () => { req.destroy(new Error("linear request timed out")); });
-    req.write(body); req.end();
-  });
-}
-
-async function resolveLinearTeamId() {
-  if (cfg.linearTeamId) return cfg.linearTeamId;
-  if (LINEAR_TEAM_CACHE) return LINEAR_TEAM_CACHE;
-  const data = await linearGraphQL(`{ viewer { teams(first: 1) { nodes { id key } } } }`);
-  const id = data?.viewer?.teams?.nodes?.[0]?.id;
-  if (!id) throw new Error("viewer has no Linear teams; set linearTeamId in config");
-  LINEAR_TEAM_CACHE = id;
-  return id;
-}
-
-async function actionInboxToLinear(id) {
-  if (!GMAIL_ID_RE.test(id || "")) return { ok: false, error: "invalid id", statusCode: 400 };
-  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
-  if (!cfg.linearApiKey) return { ok: false, error: "linearApiKey not configured", statusCode: 400 };
-
-  const readResp = await runGmail(["read", id]);
-  if (!readResp.ok) return { ok: false, error: readResp.stderr.trim() || "read failed", statusCode: 500 };
-  let msg;
-  try { msg = JSON.parse(readResp.stdout); }
-  catch (e) { return { ok: false, error: "bad gmail.js output: " + e.message, statusCode: 500 }; }
-
-  const subject = (msg.subject || "(no subject)").trim();
-  const from    = (msg.from || "unknown").trim();
-  const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${id}`;
-  const bodyPlain = (msg.body_text || msg.snippet || "").trim();
-  const description = [
-    `From: ${from}`,
-    `Date: ${msg.date || ""}`,
-    `Gmail: ${gmailUrl}`,
-    "",
-    bodyPlain,
-  ].join("\n");
-
-  let teamId;
-  try { teamId = await resolveLinearTeamId(); }
-  catch (e) { return { ok: false, error: e.message, statusCode: 500 }; }
-
-  try {
-    const data = await linearGraphQL(
-      `mutation($input: IssueCreateInput!) {
-         issueCreate(input: $input) {
-           success
-           issue { id identifier url title }
-         }
-       }`,
-      { input: { teamId, title: subject, description } },
-    );
-    const issue = data?.issueCreate?.issue;
-    if (!data?.issueCreate?.success || !issue) return { ok: false, error: "linear rejected", statusCode: 500 };
-    return { ok: true, identifier: issue.identifier, url: issue.url, title: issue.title };
-  } catch (e) {
-    return { ok: false, error: e.message, statusCode: 500 };
-  }
-}
-
 async function actionInboxSend(body) {
   if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
   if (!body || typeof body !== "object") return { ok: false, error: "missing body", statusCode: 400 };
@@ -1143,8 +1018,28 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/refresh") {
       return send(res, 200, await actionRefresh());
     }
-    if (req.method === "POST" && req.url === "/api/sync-linear") {
-      return send(res, 200, await actionSyncLinear());
+    if (req.method === "GET" && req.url === "/api/tmux") {
+      return send(res, 200, await tmuxListWindows());
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/tmux/capture")) {
+      const u = new URL(req.url, "http://127.0.0.1");
+      const r = await tmuxCapture(u.searchParams.get("window"));
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/tmux/send") {
+      const body = await readBody(req);
+      const r = await tmuxSend(body.window, { text: body.text, key: body.key });
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/tmux/select") {
+      const body = await readBody(req);
+      const r = await tmuxSelect(body.window);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/tmux/new-window") {
+      const body = await readBody(req);
+      const r = await tmuxNewWindow(body.name);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
     }
     if (req.method === "POST" && req.url === "/api/open") {
       const body = await readBody(req);
@@ -1171,7 +1066,6 @@ const server = http.createServer(async (req, res) => {
         snippets: cfg.gmailSnippets && typeof cfg.gmailSnippets === "object" ? cfg.gmailSnippets : {},
         important_only: !!cfg.gmailImportantOnly,
         team_emails: Array.isArray(cfg.teamEmails) ? cfg.teamEmails : [],
-        has_linear: !!cfg.linearApiKey,
         has_summarizer: Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length > 0,
       });
     }
@@ -1207,13 +1101,6 @@ const server = http.createServer(async (req, res) => {
       const r = await actionInboxSend(body);
       return send(res, r.ok ? 200 : (r.statusCode || 400), r);
     }
-    {
-      const m = req.method === "POST" && req.url.match(/^\/api\/inbox\/([^/?#]+)\/to-linear$/);
-      if (m) {
-        const r = await actionInboxToLinear(decodeURIComponent(m[1]));
-        return send(res, r.ok ? 200 : (r.statusCode || 400), r);
-      }
-    }
     if (req.method === "GET" && req.url === "/api/config/custom-widgets") {
       return send(res, 200, { widgets: Array.isArray(cfg.customWidgets) ? cfg.customWidgets : [] });
     }
@@ -1238,8 +1125,26 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(cfg.port, cfg.host, () => {
-  console.log(`glance ${PKG.version} (${platform.platformLabel})  http://${cfg.host}:${cfg.port}/`);
+// host "tailscale" → this machine's tailnet IPv4, so the dashboard is reachable
+// from other tailnet machines but not the open internet. If tailscale can't be
+// queried we fall back to loopback rather than something wider, so a broken
+// tailscale never silently exposes the terminal endpoints.
+function resolveBindHost() {
+  if (cfg.host !== "tailscale") return cfg.host;
+  try {
+    const ip = execSync("tailscale ip -4", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n").map(s => s.trim()).find(s => IPV4_RE.test(s));
+    if (ip) return ip;
+    console.error("glance: host=tailscale but `tailscale ip -4` returned no IPv4; binding 127.0.0.1");
+  } catch (e) {
+    console.error(`glance: host=tailscale but tailscale unavailable (${e.message}); binding 127.0.0.1`);
+  }
+  return "127.0.0.1";
+}
+
+const BIND_HOST = resolveBindHost();
+server.listen(cfg.port, BIND_HOST, () => {
+  console.log(`glance ${PKG.version} (${platform.platformLabel})  http://${BIND_HOST}:${cfg.port}/`);
 });
 
 // Graceful shutdown so the extension can stop us cleanly.

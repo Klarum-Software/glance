@@ -8,8 +8,16 @@ const CONFIG_DIR  = path.join(os.homedir(), ".config", "glance");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 const DEFAULTS = {
-  port:       5175,
+  // 5172 keeps glance clear of the dev worktree port ranges the mac mini
+  // hands out (frontends on 5173+N, backends on 8000+N).
+  port:       5172,
+  // "127.0.0.1" (default), an explicit address, "0.0.0.0", or the literal
+  // "tailscale" — which server.js resolves to this host's tailnet IPv4 so the
+  // dashboard is reachable from other tailnet machines (and nowhere else).
   host:       "127.0.0.1",
+  // tmux session the web terminal drives, and the tmux binary to shell out to.
+  tmuxSession: "main",
+  tmuxBin:     "tmux",
   inboxDir:   path.join(os.homedir(), "claude-inbox"),
   // optional: path to a calendar.js providing `list 7`-style stdout
   calendarBin: null,
@@ -39,19 +47,10 @@ const DEFAULTS = {
   // of the heuristic. Example: ["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"].
   // 15s timeout, falls back to heuristic on any failure.
   gmailSummarizerCmd: null,
-  // optional Linear team ID used when creating issues from inbox messages.
-  // If unset, the server fetches the viewer's first team on first use.
-  linearTeamId: null,
-  // optional: inbox-ui /api/linear/sync endpoint
-  linearSyncUrl: null,
-  // optional: Linear API key for built-in sync (alternative to linearSyncUrl)
-  linearApiKey: null,
   // services to ping in the topbar (linux: systemd unit names; macos: launchd labels; win: service names)
   services: ["glance"],
   // tailnet peer presence — turn on if you've installed klarum-presence on peers
   presencePort: 5176,
-  // me_emails: used for filtering Linear cache to "issues assigned to me"
-  meEmails: [],
   // manually-configured remote peers, added via the REMOTE column "+" button.
   // shown alongside tailscale-discovered peers. each item: { name, host, port? }
   peers: [],
@@ -72,12 +71,10 @@ function load() {
   if (process.env.GLANCE_GMAIL_MAX_UNREAD) env.gmailMaxUnread = Number(process.env.GLANCE_GMAIL_MAX_UNREAD);
   if (process.env.GLANCE_GMAIL_IMPORTANT_ONLY) env.gmailImportantOnly = /^(1|true|yes)$/i.test(process.env.GLANCE_GMAIL_IMPORTANT_ONLY);
   if (process.env.GLANCE_TEAM_EMAILS)  env.teamEmails  = process.env.GLANCE_TEAM_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (process.env.GLANCE_LINEAR_TEAM_ID) env.linearTeamId = process.env.GLANCE_LINEAR_TEAM_ID;
-  if (process.env.GLANCE_LINEAR_SYNC)     env.linearSyncUrl = process.env.GLANCE_LINEAR_SYNC;
-  if (process.env.GLANCE_LINEAR_API_KEY) env.linearApiKey  = process.env.GLANCE_LINEAR_API_KEY;
+  if (process.env.GLANCE_TMUX_SESSION) env.tmuxSession = process.env.GLANCE_TMUX_SESSION;
+  if (process.env.GLANCE_TMUX_BIN)     env.tmuxBin     = process.env.GLANCE_TMUX_BIN;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);
   if (process.env.GLANCE_PRESENCE_PORT) env.presencePort = Number(process.env.GLANCE_PRESENCE_PORT);
-  if (process.env.GLANCE_ME_EMAILS)    env.meEmails = process.env.GLANCE_ME_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 
   return { ...DEFAULTS, ...user, ...env };
 }

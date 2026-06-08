@@ -56,11 +56,11 @@ usually the only test that matters.
 ### Layer 2 — browser fallback (QA only)
 
 ```bash
-node server/server.js   # boots on http://127.0.0.1:5175/
+node server/server.js   # boots on http://127.0.0.1:5172/
 # open the URL in any browser
 ```
 
-The browser fallback at `127.0.0.1:5175/` renders the same `/api/state`
+The browser fallback at `127.0.0.1:5172/` renders the same `/api/state`
 data using HTML/CSS instead of St widgets. **Use it only to:**
 
 - Confirm `/api/state` returns the right shape before testing the
@@ -166,7 +166,7 @@ calls silently never resolve, the backend probably isn't running.
 
 ```bash
 # from inside the nested shell (or after enabling in real session):
-curl -s http://127.0.0.1:5175/api/health
+curl -s http://127.0.0.1:5172/api/health
 # expect: {"ok":true,"version":"...","platform":"linux"}
 
 ps aux | grep "server/server.js" | grep -v grep

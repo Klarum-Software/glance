@@ -1,6 +1,6 @@
 # Gmail setup
 
-Glance can show your unread Gmail in the INBOX column and let you read,
+Glance can show your unread Gmail in the MAIL column and let you read,
 summarize, archive, reply, and send messages from the browser dashboard.
 
 The integration reuses the OAuth client you already created for Google
@@ -59,7 +59,6 @@ Add to `~/.config/glance/config.json`:
     "needs more info":  "Could you share a bit more detail on this? Specifically: ..."
   },
   "teamEmails":   ["alice@example.com", "bob@example.com"],
-  "linearTeamId": null,
   "gmailSummarizerCmd": ["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"]
 }
 ```
@@ -72,10 +71,7 @@ Add to `~/.config/glance/config.json`:
 - `gmailSnippets`: key/value map of canned replies. The browser compose
   modal shows a dropdown that fills the body when picked.
 - `teamEmails`: senders in this list get a colored left-bar and float to
-  the top of the INBOX column.
-- `linearTeamId`: explicit Linear team ID used by the "linear" button on
-  each inbox row. Unset means the server fetches your viewer's first team
-  on first use and caches it.
+  the top of the inbox section of the MAIL column.
 - `gmailSummarizerCmd`: argv array for an external summarizer. When set,
   `gmail.js summarize` pipes the email body to its stdin and returns the
   command's stdout. 15s timeout; falls back to the heuristic on any
@@ -84,7 +80,7 @@ Add to `~/.config/glance/config.json`:
   - `["ssh", "mac-mini", "ollama", "run", "qwen2.5:7b"]` (remote Ollama)
   - `["claude", "-p", "Summarize this email in one sentence."]` (Claude Code CLI)
 
-Restart the backend. The INBOX column populates within ~60s (the cache TTL).
+Restart the backend. The MAIL column's inbox section populates within ~60s (the cache TTL).
 
 The INBOX widget is registered but disabled by default in the extension
 layout. Open prefs -> Widgets, or use the in-dashboard edit mode (gear icon
@@ -121,12 +117,11 @@ echo '{"to":"a@b.com","subject":"hi","body":"hi"}' | node server/bin/gmail.js se
 
 | Method | Path                                | Body / Query                                              |
 |--------|-------------------------------------|-----------------------------------------------------------|
-| GET    | `/api/inbox/settings`               | -- (snippets, has_linear, has_summarizer, team_emails, ...) |
+| GET    | `/api/inbox/settings`               | -- (snippets, has_summarizer, team_emails, ...)           |
 | GET    | `/api/inbox/search?q=&max=`         | -- (any Gmail query string)                               |
 | GET    | `/api/inbox/<id>`                   | -- (returns full message)                                 |
 | POST   | `/api/inbox/<id>/summarize`         | -- (returns one-line summary)                             |
 | POST   | `/api/inbox/<id>/mark`              | `{ "action": "read" \| "archive" \| "trash" }`            |
-| POST   | `/api/inbox/<id>/to-linear`         | -- (creates Linear issue, returns identifier + url)       |
 | POST   | `/api/inbox/send`                   | `{ to, subject, body, cc?, bcc?, reply_to_id? }`          |
 
 `/api/state` now includes an `inbox` block: `{ authed, fetch_failed, unread_count, items }`.

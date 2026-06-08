@@ -193,6 +193,7 @@ class GlanceIndicator extends PanelMenu.Button {
             layoutJson,
             editMode,
             onOpenUrl:       (url) => this._openUrl(url),
+            onTmuxSelect:    (w)   => this._tmuxSelect(w),
             onToggleEdit:    () => this._settings.set_boolean("edit-mode", !editMode),
             onMoveWidget:    (id, dir) => this._mutateLayout(layout => moveWidget(layout, id, dir)),
             onResizeWidget:  (id, dir) => this._mutateLayout(layout => resizeWidget(layout, id, dir)),
@@ -203,6 +204,13 @@ class GlanceIndicator extends PanelMenu.Button {
     _openUrl(url) {
         if (!this._backend || !url) return;
         api.post(`${this._backend.url}/api/open`, { url }, this._cancellable).catch(() => {});
+    }
+
+    _tmuxSelect(window) {
+        if (!this._backend || window == null) return;
+        api.post(`${this._backend.url}/api/tmux/select`, { window }, this._cancellable)
+            .then(() => this._refresh())
+            .catch(() => {});
     }
 
     _parseCustomWidgets() {
@@ -297,19 +305,17 @@ class GlanceIndicator extends PanelMenu.Button {
     }
 
     _updatePanel(state) {
-        const lin = state.linear || { total: 0, overdue: 0, items: [] };
-        const p1 = (lin.items || []).filter(i => i.priority === 1).length;
-        const overdue = lin.overdue || 0;
         const sessions = (state.sessions || []).length;
         const unread = (state.inbox && state.inbox.unread_count) || 0;
+        const tmux = state.tmux || {};
+        const windows = tmux.exists ? (tmux.windows || []).length : 0;
 
         const parts = [];
-        if (p1)       parts.push(`P1·${p1}`);
-        if (overdue)  parts.push(`!${overdue}`);
+        if (windows)  parts.push(`❯${windows}`);
         if (sessions) parts.push(`▸${sessions}`);
         if (unread)   parts.push(`✉${unread}`);
         this._label.text = parts.length ? parts.join("  ") : "glance";
-        this._dot.style_class = "system-status-icon glance-dot online" + (overdue ? " warn" : "");
+        this._dot.style_class = "system-status-icon glance-dot online";
     }
 
     destroy() {

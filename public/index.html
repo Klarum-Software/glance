@@ -14,19 +14,14 @@
       <span class="brand-time" id="clock">—</span>
     </div>
 
-    <div class="services" id="services" title="systemd-user service status">
+    <div class="services" id="services" title="service status">
       <span class="svc" data-svc="orch"><i></i>orch</span>
       <span class="svc" data-svc="inbox"><i></i>inbox</span>
       <span class="svc" data-svc="tmux"><i></i>tmux</span>
     </div>
 
     <div class="actions">
-      <button class="btn btn-claude" data-action="launch-claude" title="Launch new claude session in ~/repos/noah-tools">
-        <span class="btn-claude-icon">▸</span>claude
-      </button>
       <button class="btn" data-action="refresh">Refresh</button>
-      <button class="btn" data-action="sync-linear">Sync Linear</button>
-      <a class="btn btn-link" href="http://127.0.0.1:5174" target="_blank" rel="noopener">Inbox UI</a>
     </div>
   </header>
 
@@ -47,16 +42,7 @@
         </div>
         <div class="peer-add-error" id="peer-add-error"></div>
       </form>
-      <div class="remote-grid" id="remote-grid">
-        <div class="remote-empty">
-          <div class="remote-empty-title">no peers configured</div>
-          <div class="remote-empty-hint">
-            Install <code>klarum-presence</code> on each machine in the tailnet.
-            <br>Peers will be auto-discovered via <code>tailscale status --json</code>,
-            or add a peer manually with the <code>+</code> button above.
-          </div>
-        </div>
-      </div>
+      <div class="remote-grid" id="remote-grid"></div>
     </section>
 
     <div class="col-gutter" data-gutter-after="remote"></div>
@@ -73,31 +59,39 @@
 
     <div class="col-gutter" data-gutter-after="sessions"></div>
 
-    <section class="col" data-col="linear">
-      <h2><span class="col-tag linear">LINEAR</span><span class="col-meta" id="linear-meta"></span></h2>
-      <ul class="list" id="linear-list"></ul>
-    </section>
-
-    <div class="col-gutter" data-gutter-after="linear"></div>
-
-    <section class="col" data-col="calendar">
-      <h2><span class="col-tag calendar">CALENDAR</span><span class="col-meta" id="calendar-meta"></span></h2>
-      <ul class="list" id="calendar-list"></ul>
-    </section>
-
-    <div class="col-gutter" data-gutter-after="calendar"></div>
-
-    <section class="col" data-col="inbox">
+    <section class="col col-terminal" data-col="terminal">
       <h2>
-        <span class="col-tag inbox">INBOX</span>
-        <span class="col-meta" id="inbox-meta"></span>
+        <span class="col-tag terminal">TERMINAL</span>
+        <span class="col-meta" id="terminal-meta"></span>
+        <button class="col-action" id="terminal-new" title="new tmux window">+</button>
+      </h2>
+      <div class="term-tabs" id="term-tabs"></div>
+      <div class="term-screen" id="term-screen" tabindex="0" spellcheck="false"></div>
+      <div class="term-hint" id="term-hint"></div>
+    </section>
+
+    <div class="col-gutter" data-gutter-after="terminal"></div>
+
+    <section class="col col-mail" data-col="mail">
+      <h2>
+        <span class="col-tag mail">MAIL</span>
+        <span class="col-meta" id="mail-meta"></span>
         <button class="col-action" id="inbox-compose" title="compose new email">+</button>
       </h2>
       <form class="inbox-search" id="inbox-search-form" autocomplete="off">
-        <input type="search" id="inbox-search-input" placeholder='search (Gmail query, e.g. from:alice has:attachment)'>
+        <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'>
         <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
       </form>
-      <ul class="list" id="inbox-list"></ul>
+      <div class="mail-body">
+        <div class="mail-section">
+          <div class="mail-subhead">CALENDAR <span class="col-meta" id="calendar-meta"></span></div>
+          <ul class="list cal-list" id="calendar-list"></ul>
+        </div>
+        <div class="mail-section mail-inbox">
+          <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
+          <ul class="list" id="inbox-list"></ul>
+        </div>
+      </div>
     </section>
   </main>
 

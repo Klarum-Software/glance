@@ -1,7 +1,7 @@
 {
   "uuid": "glance@klarum-software.github.io",
   "name": "Glance",
-  "description": "Single-screen operator dashboard — tailnet peers, claude sessions, Linear queue, calendar.",
+  "description": "Single-screen operator control center: tailnet peers, claude sessions, tmux windows, calendar and inbox.",
   "version": 1,
   "shell-version": ["46", "47", "48", "49"],
   "session-modes": ["user"],
