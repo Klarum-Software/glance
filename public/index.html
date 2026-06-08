@@ -38,6 +38,11 @@
           <span class="nav-label">MAIL</span>
           <span class="nav-badge" id="nav-badge-mail"></span>
         </button>
+        <button class="nav-item" data-panel="settings" title="SETTINGS">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+          <span class="nav-label">SETTINGS</span>
+          <span class="nav-badge" id="nav-badge-settings"></span>
+        </button>
       </nav>
 
       <div class="side-foot">
@@ -114,6 +119,19 @@
             <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
             <ul class="list" id="inbox-list"></ul>
           </div>
+        </div>
+      </section>
+
+      <section class="col col-settings panel" data-panel="settings" hidden>
+        <h2><span class="col-tag settings">SETTINGS</span><span class="col-meta" id="settings-meta"></span></h2>
+        <div class="settings-wrap">
+          <nav class="settings-nav" id="settings-nav">
+            <button class="set-nav-item" data-sec="accounts">Connected accounts</button>
+            <button class="set-nav-item" data-sec="peers">Peers</button>
+            <button class="set-nav-item" data-sec="inbox">Inbox</button>
+            <button class="set-nav-item" data-sec="appearance">Appearance</button>
+          </nav>
+          <div class="settings-body" id="settings-body"></div>
         </div>
       </section>
     </main>
