@@ -330,7 +330,13 @@ function tmuxProxy(pathAndQuery, method = "GET", bodyObj = null) {
 function tmuxRun(args, opts = {}) {
   return new Promise((resolve) => {
     const out = [], err = [];
-    const child = spawn(cfg.tmuxBin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    // Under a non-UTF-8 (C/POSIX) locale, tmux sanitizes non-printable bytes in
+    // its output: the tab field separators in list-windows -F become "_" (which
+    // silently breaks parsing) and capture-pane mangles UTF-8. Launchd and
+    // systemd start the backend with a bare environment and no locale, so force
+    // a UTF-8 one for tmux rather than depend on how glance itself was launched.
+    const env = { ...process.env, LC_ALL: process.env.LC_ALL || process.env.LANG || "en_US.UTF-8" };
+    const child = spawn(cfg.tmuxBin, args, { stdio: ["pipe", "pipe", "pipe"], env });
     child.stdout.on("data", c => out.push(c));
     child.stderr.on("data", c => err.push(c));
     child.on("close", code => resolve({
