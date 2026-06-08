@@ -7,6 +7,25 @@ The integration reuses the OAuth client you already created for Google
 Calendar (or you create one if Calendar isn't wired up). One client, one
 consent screen, one token file on disk.
 
+## Quick connect (gcloud)
+
+If you have the Google Cloud SDK, the fastest route borrows gcloud's own
+OAuth client and skips the Cloud Console. It enables the Gmail API on your
+active project, runs an ADC login for the gmail scope, and writes both the
+token and `gmailBin` into your config:
+
+```
+gcloud config set project klarum-internal-tools   # or your own project
+node server/bin/google-auth.js --gcloud --gmail
+```
+
+Drop the `--gmail` flag (or add `--calendar`) to connect both surfaces in one
+run. A browser tab opens for consent; restart the backend afterward.
+
+Note: `gmail.modify` is a restricted scope. If gcloud's client cannot consent
+to it, the helper says so and exits; in that case use the manual OAuth client
+below, which you control. The rest of this doc covers that manual route.
+
 ## 1. OAuth client (skip if already set up for Calendar)
 
 Follow [CALENDAR-SETUP.md](CALENDAR-SETUP.md) section 1 to create a Desktop

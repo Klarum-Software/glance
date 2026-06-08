@@ -1,9 +1,31 @@
 # Google Calendar setup
 
 Glance shows your upcoming Google Calendar events in the CALENDAR column.
-Google requires per-app OAuth, so each user creates their own OAuth client
-in their own Google Cloud project. Nothing private is stored in this repo;
-the token lives in `~/.config/glance/google-token.json` (mode 600).
+The token lives in `~/.config/glance/google-token.json` (mode 600). Nothing
+private is stored in this repo.
+
+There are two ways to connect. If you have the gcloud CLI, the quick path
+below is the easiest; otherwise create your own OAuth client (sections 1-3).
+
+## Quick connect (gcloud)
+
+If you already use the Google Cloud SDK (`gcloud auth login` done once), you
+can skip the Cloud Console entirely. This borrows gcloud's own OAuth client,
+enables the Calendar API on your active project, runs an ADC login for the
+calendar scope, and writes both the token and `calendarBin` into your config:
+
+```
+gcloud config set project klarum-internal-tools   # or your own project
+node server/bin/google-auth.js --gcloud --calendar
+```
+
+A browser tab opens for consent (this is gcloud's standard ADC login). When
+it finishes, restart the backend and the CALENDAR column populates within a
+refresh cycle. Add `--gmail`, or drop the scope flags entirely, to connect
+Gmail in the same run. See [GMAIL-SETUP.md](GMAIL-SETUP.md) for the Gmail
+column. No client_id/secret to paste, no `config.json` to edit by hand.
+
+The rest of this doc is the manual route: bring your own OAuth client.
 
 ## 1. Create an OAuth client in Google Cloud
 
