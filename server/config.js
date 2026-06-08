@@ -18,6 +18,12 @@ const DEFAULTS = {
   // tmux session the web terminal drives, and the tmux binary to shell out to.
   tmuxSession: "main",
   tmuxBin:     "tmux",
+  // When set to another glance instance's base URL (e.g.
+  // "http://100.66.100.32:5172"), this backend proxies all /api/tmux* calls
+  // there instead of running tmux locally. That is how every non-host machine
+  // joins the one canonical session: tmux "main" lives on s01, s01's glance
+  // drives it locally, and k02/k03 point tmuxHost at s01. Null = local tmux.
+  tmuxHost:    null,
   inboxDir:   path.join(os.homedir(), "claude-inbox"),
   // optional: path to a calendar.js providing `list 7`-style stdout
   calendarBin: null,
@@ -73,6 +79,7 @@ function load() {
   if (process.env.GLANCE_TEAM_EMAILS)  env.teamEmails  = process.env.GLANCE_TEAM_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   if (process.env.GLANCE_TMUX_SESSION) env.tmuxSession = process.env.GLANCE_TMUX_SESSION;
   if (process.env.GLANCE_TMUX_BIN)     env.tmuxBin     = process.env.GLANCE_TMUX_BIN;
+  if (process.env.GLANCE_TMUX_HOST)    env.tmuxHost    = process.env.GLANCE_TMUX_HOST;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);
   if (process.env.GLANCE_PRESENCE_PORT) env.presencePort = Number(process.env.GLANCE_PRESENCE_PORT);
 

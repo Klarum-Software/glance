@@ -71,8 +71,10 @@
 
 All optional. See [server/config.js](../server/config.js).
 
-`~/.config/glance/config.json` keys: `port`, `host` (`"tailscale"` binds the
-tailnet IPv4), `tmuxSession`, `tmuxBin`, `inboxDir`, `calendarBin`,
+`~/.config/glance/config.json` keys: `port`, `host` (`"tailscale"` binds
+loopback + the tailnet IPv4), `tmuxSession`, `tmuxBin`, `tmuxHost` (another
+glance URL to proxy `/api/tmux*` to; how non-host machines join s01's
+session), `inboxDir`, `calendarBin`,
 `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`, `gmailBlacklist`,
 `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`, `services[]`,
 `presencePort`, `peers[]`.

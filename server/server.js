@@ -279,6 +279,54 @@ async function gatherRemote() {
 
 const WINDOW_IDX_RE = /^\d{1,3}$/;
 
+// When tmuxHost names another glance instance, every /api/tmux* call is
+// forwarded there instead of run locally. This is how k02/k03 drive the one
+// canonical session that lives on s01: their backend proxies to s01's glance
+// over the tailnet (no ssh, no mosh — tmux is multi-client and the session
+// outlives any attached client).
+const TMUX_REMOTE = (() => {
+  if (!cfg.tmuxHost) return null;
+  try {
+    const u = new URL(cfg.tmuxHost);
+    if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("protocol must be http(s)");
+    return u;
+  } catch (e) {
+    console.error(`glance: ignoring invalid tmuxHost "${cfg.tmuxHost}": ${e.message}`);
+    return null;
+  }
+})();
+
+function tmuxProxy(pathAndQuery, method = "GET", bodyObj = null) {
+  return new Promise((resolve) => {
+    const u = new URL(pathAndQuery, TMUX_REMOTE);
+    const lib = u.protocol === "https:" ? https : http;
+    const payload = bodyObj != null ? JSON.stringify(bodyObj) : null;
+    const req = lib.request({
+      protocol: u.protocol,
+      host: u.hostname,
+      port: u.port || (u.protocol === "https:" ? 443 : 80),
+      path: u.pathname + (u.search || ""),
+      method,
+      headers: {
+        accept: "application/json",
+        ...(payload != null ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
+      },
+      timeout: 4000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+        catch { resolve({ ok: false, error: "bad response from tmuxHost" }); }
+      });
+    });
+    req.on("error", e => resolve({ ok: false, error: `tmuxHost: ${e.message}` }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "tmuxHost: timeout" }); });
+    if (payload != null) req.write(payload);
+    req.end();
+  });
+}
+
 function tmuxRun(args, opts = {}) {
   return new Promise((resolve) => {
     const out = [], err = [];
@@ -301,6 +349,11 @@ function tmuxTarget(window) {
 }
 
 async function tmuxListWindows() {
+  if (TMUX_REMOTE) {
+    const r = await tmuxProxy("/api/tmux");
+    if (r && r.ok) return { ...r, remote: TMUX_REMOTE.host };
+    return { ok: true, session: cfg.tmuxSession, exists: false, windows: [], remote: TMUX_REMOTE.host, error: (r && r.error) || "tmuxHost unreachable" };
+  }
   const fmt = "#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}\t#{pane_current_command}\t#{pane_current_path}";
   const r = await tmuxRun(["list-windows", "-t", cfg.tmuxSession, "-F", fmt]);
   if (!r.ok) {
@@ -326,6 +379,7 @@ async function tmuxListWindows() {
 
 async function tmuxCapture(window) {
   if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  if (TMUX_REMOTE) return tmuxProxy(`/api/tmux/capture?window=${encodeURIComponent(window)}`);
   // -e keeps SGR escapes so the browser can colorize; -p writes to stdout;
   // -J joins wrapped lines so the client sees logical rows.
   const r = await tmuxRun(["capture-pane", "-ep", "-t", tmuxTarget(window)]);
@@ -340,6 +394,7 @@ const TMUX_KEY_RE = /^(Enter|Tab|Escape|Space|BSpace|Up|Down|Left|Right|Home|End
 
 async function tmuxSend(window, { text, key }) {
   if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  if (TMUX_REMOTE) return tmuxProxy("/api/tmux/send", "POST", { window, text, key });
   const target = tmuxTarget(window);
   let args;
   if (typeof key === "string" && key.length) {
@@ -358,12 +413,14 @@ async function tmuxSend(window, { text, key }) {
 
 async function tmuxSelect(window) {
   if (!WINDOW_IDX_RE.test(String(window))) return { ok: false, error: "invalid window", statusCode: 400 };
+  if (TMUX_REMOTE) return tmuxProxy("/api/tmux/select", "POST", { window });
   const r = await tmuxRun(["select-window", "-t", tmuxTarget(window)]);
   if (!r.ok) return { ok: false, error: r.stderr.trim() || "select failed", statusCode: 500 };
   return { ok: true };
 }
 
 async function tmuxNewWindow(name) {
+  if (TMUX_REMOTE) return tmuxProxy("/api/tmux/new-window", "POST", { name });
   const args = ["new-window", "-t", cfg.tmuxSession];
   if (typeof name === "string" && /^[\w.\- ]{1,40}$/.test(name)) args.push("-n", name);
   const r = await tmuxRun(args);
@@ -1007,7 +1064,7 @@ async function actionInboxSend(body) {
 
 // ── router ─────────────────────────────────────────────────────────────────
 
-const server = http.createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/health") {
       return send(res, 200, { ok: true, version: PKG.version, platform: platform.platformLabel });
@@ -1114,16 +1171,7 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     send(res, 500, { error: e.message });
   }
-});
-
-server.on("error", (err) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`glance: port ${cfg.port} already in use on ${cfg.host} (another glance backend running?)`);
-    process.exit(2);
-  }
-  console.error(`glance: server error: ${err.code || ""} ${err.message}`);
-  process.exit(1);
-});
+};
 
 // host "tailscale" → this machine's tailnet IPv4, so the dashboard is reachable
 // from other tailnet machines but not the open internet. If tailscale can't be
@@ -1143,14 +1191,34 @@ function resolveBindHost() {
 }
 
 const BIND_HOST = resolveBindHost();
-server.listen(cfg.port, BIND_HOST, () => {
-  console.log(`glance ${PKG.version} (${platform.platformLabel})  http://${BIND_HOST}:${cfg.port}/`);
+// Always answer on loopback for on-box use; when host resolves to a tailnet
+// IP, also bind that so other tailnet machines can reach this instance. Two
+// listeners share one request handler; binding two explicit addresses keeps us
+// off any other (public/LAN) interface, unlike 0.0.0.0.
+const BIND_HOSTS = [BIND_HOST];
+if (!["127.0.0.1", "::1", "0.0.0.0"].includes(BIND_HOST)) BIND_HOSTS.unshift("127.0.0.1");
+
+const servers = BIND_HOSTS.map((host) => {
+  const s = http.createServer(requestHandler);
+  s.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`glance: port ${cfg.port} already in use on ${host} (another glance backend running?)`);
+      process.exit(2);
+    }
+    console.error(`glance: server error on ${host}: ${err.code || ""} ${err.message}`);
+    process.exit(1);
+  });
+  s.listen(cfg.port, host, () => {
+    console.log(`glance ${PKG.version} (${platform.platformLabel})  http://${host}:${cfg.port}/`);
+  });
+  return s;
 });
 
 // Graceful shutdown so the extension can stop us cleanly.
 function shutdown() {
   for (const id of [...customTimers.keys()]) stopCustomPoller(id);
-  server.close(() => process.exit(0));
+  let pending = servers.length;
+  for (const s of servers) s.close(() => { if (--pending === 0) process.exit(0); });
   setTimeout(() => process.exit(1), 2000).unref();
 }
 process.on("SIGTERM", shutdown);
