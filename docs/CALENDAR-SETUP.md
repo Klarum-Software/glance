@@ -15,6 +15,25 @@ Download its JSON from the Console (APIs & Services -> Credentials -> klarum-dev
 -> Download) and skip to section 2. Anyone standing this up in a fresh project
 follows section 1.
 
+## Connect from the dashboard (no terminal)
+
+Once the client file is in place (section 2), you can connect from the browser
+dashboard instead of the CLI: open glance at `http://localhost:5172`, go to the
+SETTINGS panel -> Connected accounts, and click Connect on Google Calendar or
+Gmail. The button opens Google in the same tab and returns you to glance with
+the column live; no restart needed.
+
+Two requirements for the button:
+
+- Open glance via `http://localhost:5172` on the same machine that runs the
+  backend. Google only allows `http://localhost` OAuth redirects, so a remote
+  dashboard reached over the tailnet can't complete the browser flow (use the
+  CLI helper there, section 3).
+- A **Web** client (like klarum-dev) must have glance's callback registered as
+  an Authorized redirect URI: `http://localhost:5172/api/google/connect/callback`.
+  The Connect button tells you the exact URI to add if it's missing. Desktop
+  clients need nothing extra. The CLI helper (section 3) does not need this.
+
 ## 1. Create an OAuth client (once per project)
 
 One-time setup, about 5 minutes.
