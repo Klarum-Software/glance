@@ -7,17 +7,9 @@ const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); re
 
 const TERM_POLL_MS  = 1200;
 
-const GUTTER_PX     = 6;
-const COL_MIN_PX    = 160;
-const COL_WIDTH_KEY = (name) => `glance.colwidth.${name}`;
-// Default fr values. The terminal is the centerpiece of the control center, so
-// it gets the most room; mail (calendar + inbox) sits on the right.
-const COL_DEFAULTS = {
-  remote:   2.6,
-  sessions: 1.6,
-  terminal: 4.2,
-  mail:     2.6,
-};
+const PANELS       = ["remote", "sessions", "terminal", "mail"];
+const PANEL_KEY    = "glance.panel";
+const COLLAPSE_KEY = "glance.sidebar.collapsed";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...children) => {
@@ -419,6 +411,7 @@ function renderSearchResults(payload) {
 function render(state) {
   renderClock(state.now);
   renderServices(state.services || {});
+  updateNavBadges(state);
   renderRemote(state.remote);
   renderSessions(state);
   renderTerminalTabs(state.tmux);
@@ -616,96 +609,50 @@ async function pasteTerminal(ev) {
   if (text) { ev.preventDefault(); sendTerminal({ text }); }
 }
 
-// ── resizable columns ─────────────────────────────────────────────────────
+// ── sidebar nav (single active panel) ──────────────────────────────────────
 
-function getColEls() {
-  return Array.from(document.querySelectorAll(".grid > .col"));
+function activePanel() {
+  const saved = localStorage.getItem(PANEL_KEY);
+  return PANELS.includes(saved) ? saved : "remote";
 }
 
-function loadColFr(name) {
-  const raw = localStorage.getItem(COL_WIDTH_KEY(name));
-  if (raw == null) return COL_DEFAULTS[name] ?? 1;
-  const n = parseFloat(raw);
-  return Number.isFinite(n) && n > 0 ? n : (COL_DEFAULTS[name] ?? 1);
+function setActivePanel(name) {
+  if (!PANELS.includes(name)) name = "remote";
+  for (const s of document.querySelectorAll(".panel")) s.hidden = s.dataset.panel !== name;
+  for (const b of document.querySelectorAll(".nav-item")) b.classList.toggle("active", b.dataset.panel === name);
+  localStorage.setItem(PANEL_KEY, name);
+  // The terminal only paints while visible; refresh it the moment it shows.
+  if (name === "terminal") { captureTerminal(); $("term-screen")?.focus(); }
 }
 
-function saveColFr(name, fr) {
-  localStorage.setItem(COL_WIDTH_KEY(name), String(fr));
+function setSidebarCollapsed(collapsed) {
+  $("sidebar").classList.toggle("collapsed", collapsed);
+  $("side-toggle").textContent = collapsed ? "›" : "‹";
+  $("side-toggle").title = collapsed ? "expand sidebar" : "collapse sidebar";
+  localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
 }
 
-function applyGridTemplate() {
-  const grid = $("grid");
-  if (!grid) return;
-  const parts = [];
-  const children = Array.from(grid.children);
-  for (const el of children) {
-    if (el.classList.contains("col")) {
-      const name = el.dataset.col;
-      parts.push(`minmax(${COL_MIN_PX}px, ${loadColFr(name)}fr)`);
-    } else if (el.classList.contains("col-gutter")) {
-      parts.push(`${GUTTER_PX}px`);
-    }
+function updateNavBadges(state) {
+  const peers = state.remote?.peers || [];
+  const online = peers.filter(p => p.online).length;
+  $("nav-badge-remote").textContent   = peers.length ? `${online}/${peers.length}` : "";
+  $("nav-badge-sessions").textContent = String((state.sessions || []).length || "");
+  $("nav-badge-terminal").textContent = state.tmux?.exists ? String((state.tmux.windows || []).length) : "";
+
+  const unread = state.inbox?.unread_count || 0;
+  $("nav-badge-mail").textContent = unread ? String(unread) : "";
+  document.querySelector('.nav-item[data-panel="mail"]')?.classList.toggle("has-alert", unread > 0);
+}
+
+function initSidebar() {
+  setSidebarCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+  setActivePanel(activePanel());
+  for (const b of document.querySelectorAll(".nav-item")) {
+    b.addEventListener("click", () => setActivePanel(b.dataset.panel));
   }
-  grid.style.gridTemplateColumns = parts.join(" ");
-}
-
-// Drag a gutter: compute the px delta, convert to fr delta using the ratio
-// of total fr-units to total fr-track-width, then redistribute between the
-// two adjacent columns. Clamps to COL_MIN_PX on both sides.
-function startGutterDrag(gutter, startEvent) {
-  startEvent.preventDefault();
-  const grid = $("grid");
-  const left  = gutter.previousElementSibling;
-  const right = gutter.nextElementSibling;
-  if (!left || !right || !left.classList.contains("col") || !right.classList.contains("col")) return;
-
-  const leftName  = left.dataset.col;
-  const rightName = right.dataset.col;
-  const startX    = startEvent.clientX;
-  const leftFr0   = loadColFr(leftName);
-  const rightFr0  = loadColFr(rightName);
-  const leftPx0   = left.getBoundingClientRect().width;
-  const rightPx0  = right.getBoundingClientRect().width;
-  const pxPerFr   = (leftPx0 + rightPx0) / (leftFr0 + rightFr0);
-
-  gutter.classList.add("dragging");
-  document.body.classList.add("col-resizing");
-
-  function onMove(ev) {
-    let dx = ev.clientX - startX;
-    const leftPx  = leftPx0  + dx;
-    const rightPx = rightPx0 - dx;
-    if (leftPx  < COL_MIN_PX) dx = COL_MIN_PX - leftPx0;
-    if (rightPx < COL_MIN_PX) dx = rightPx0 - COL_MIN_PX;
-    const dFr = dx / pxPerFr;
-    const leftFr  = Math.max(0.05, leftFr0  + dFr);
-    const rightFr = Math.max(0.05, rightFr0 - dFr);
-    saveColFr(leftName,  leftFr);
-    saveColFr(rightName, rightFr);
-    applyGridTemplate();
-  }
-  function onUp() {
-    gutter.classList.remove("dragging");
-    document.body.classList.remove("col-resizing");
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup",   onUp);
-  }
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup",   onUp);
-}
-
-function initResizableColumns() {
-  applyGridTemplate();
-  for (const g of document.querySelectorAll(".col-gutter")) {
-    g.addEventListener("mousedown", (e) => startGutterDrag(g, e));
-    g.addEventListener("dblclick", () => {
-      const left  = g.previousElementSibling;
-      const right = g.nextElementSibling;
-      if (left  && left.classList.contains("col"))  saveColFr(left.dataset.col,  COL_DEFAULTS[left.dataset.col]  ?? 1);
-      if (right && right.classList.contains("col")) saveColFr(right.dataset.col, COL_DEFAULTS[right.dataset.col] ?? 1);
-      applyGridTemplate();
-    });
-  }
+  $("side-toggle")?.addEventListener("click", () => {
+    setSidebarCollapsed(!$("sidebar").classList.contains("collapsed"));
+  });
 }
 
 // ── peer add/remove UI ────────────────────────────────────────────────────
@@ -957,7 +904,7 @@ $("terminal-new")?.addEventListener("click", async () => {
   } catch (e) { toast("error: " + e.message, 3000); }
 });
 
-initResizableColumns();
+initSidebar();
 
 // ── main loop ─────────────────────────────────────────────────────────────
 
@@ -977,7 +924,7 @@ setInterval(reload, REFRESH_MS);
 
 // Faster, lighter poll just for the focused tmux pane so typing feels live
 // without dragging the whole /api/state cycle down to 1s.
-setInterval(() => { if (!document.hidden) captureTerminal(); }, TERM_POLL_MS);
+setInterval(() => { if (!document.hidden && activePanel() === "terminal") captureTerminal(); }, TERM_POLL_MS);
 
 // 1s clock tick so the time looks alive between full reloads
 setInterval(() => renderClock(new Date().toISOString()), 1000);

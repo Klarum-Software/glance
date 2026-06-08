@@ -7,93 +7,117 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-name">klarum glance</span>
-      <span class="brand-time" id="clock">—</span>
-    </div>
-
-    <div class="services" id="services" title="service status">
-      <span class="svc" data-svc="orch"><i></i>orch</span>
-      <span class="svc" data-svc="inbox"><i></i>inbox</span>
-      <span class="svc" data-svc="tmux"><i></i>tmux</span>
-    </div>
-
-    <div class="actions">
-      <button class="btn" data-action="refresh">Refresh</button>
-    </div>
-  </header>
-
-  <main class="grid" id="grid">
-    <section class="col col-remote" data-col="remote">
-      <h2>
-        <span class="col-tag remote">REMOTE</span>
-        <span class="col-meta" id="remote-meta"></span>
-        <button class="col-action" id="remote-add" title="add a peer">+</button>
-      </h2>
-      <form class="peer-add-form" id="peer-add-form" hidden>
-        <input type="text" name="name" placeholder="name" autocomplete="off" required>
-        <input type="text" name="host" placeholder="host or IP" autocomplete="off" required>
-        <input type="number" name="port" placeholder="port" min="1" max="65535" autocomplete="off">
-        <div class="peer-add-buttons">
-          <button type="submit" class="btn btn-sm">add</button>
-          <button type="button" class="btn btn-sm" id="peer-add-cancel">cancel</button>
-        </div>
-        <div class="peer-add-error" id="peer-add-error"></div>
-      </form>
-      <div class="remote-grid" id="remote-grid"></div>
-    </section>
-
-    <div class="col-gutter" data-gutter-after="remote"></div>
-
-    <section class="col col-sessions" data-col="sessions">
-      <h2><span class="col-tag sessions">SESSIONS</span><span class="col-meta" id="sessions-meta"></span></h2>
-      <div class="sessions-body">
-        <div class="ram-bar" id="ram-bar" title="system RAM">
-          <div class="ram-bar-segs" id="ram-bar-segs"></div>
-        </div>
-        <div class="sessions-list" id="sessions-list"></div>
-      </div>
-    </section>
-
-    <div class="col-gutter" data-gutter-after="sessions"></div>
-
-    <section class="col col-terminal" data-col="terminal">
-      <h2>
-        <span class="col-tag terminal">TERMINAL</span>
-        <span class="col-meta" id="terminal-meta"></span>
-        <button class="col-action" id="terminal-new" title="new tmux window">+</button>
-      </h2>
-      <div class="term-tabs" id="term-tabs"></div>
-      <div class="term-screen" id="term-screen" tabindex="0" spellcheck="false"></div>
-      <div class="term-hint" id="term-hint"></div>
-    </section>
-
-    <div class="col-gutter" data-gutter-after="terminal"></div>
-
-    <section class="col col-mail" data-col="mail">
-      <h2>
-        <span class="col-tag mail">MAIL</span>
-        <span class="col-meta" id="mail-meta"></span>
-        <button class="col-action" id="inbox-compose" title="compose new email">+</button>
-      </h2>
-      <form class="inbox-search" id="inbox-search-form" autocomplete="off">
-        <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'>
-        <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
-      </form>
-      <div class="mail-body">
-        <div class="mail-section">
-          <div class="mail-subhead">CALENDAR <span class="col-meta" id="calendar-meta"></span></div>
-          <ul class="list cal-list" id="calendar-list"></ul>
-        </div>
-        <div class="mail-section mail-inbox">
-          <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
-          <ul class="list" id="inbox-list"></ul>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head">
+        <span class="brand-dot"></span>
+        <div class="side-brand">
+          <span class="brand-name">klarum glance</span>
+          <span class="brand-sub"><span id="clock">—</span> · v0.2</span>
         </div>
       </div>
-    </section>
-  </main>
+
+      <nav class="side-nav" id="side-nav">
+        <button class="nav-item" data-panel="remote" title="REMOTE">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/></svg></span>
+          <span class="nav-label">REMOTE</span>
+          <span class="nav-badge" id="nav-badge-remote"></span>
+        </button>
+        <button class="nav-item" data-panel="sessions" title="SESSIONS">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span>
+          <span class="nav-label">SESSIONS</span>
+          <span class="nav-badge" id="nav-badge-sessions"></span>
+        </button>
+        <button class="nav-item" data-panel="terminal" title="TERMINAL">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 9 12 4 17"/><line x1="12" y1="17" x2="20" y2="17"/></svg></span>
+          <span class="nav-label">TERMINAL</span>
+          <span class="nav-badge" id="nav-badge-terminal"></span>
+        </button>
+        <button class="nav-item" data-panel="mail" title="MAIL">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span>
+          <span class="nav-label">MAIL</span>
+          <span class="nav-badge" id="nav-badge-mail"></span>
+        </button>
+      </nav>
+
+      <div class="side-foot">
+        <div class="services" id="services" title="service status">
+          <span class="svc" data-svc="orch"><i></i><span class="svc-label">orch</span></span>
+          <span class="svc" data-svc="inbox"><i></i><span class="svc-label">inbox</span></span>
+          <span class="svc" data-svc="tmux"><i></i><span class="svc-label">tmux</span></span>
+        </div>
+        <button class="btn btn-sm" data-action="refresh" title="refresh">
+          <span class="btn-label">Refresh</span>
+        </button>
+      </div>
+
+      <button class="side-toggle" id="side-toggle" title="collapse sidebar" aria-label="collapse sidebar">‹</button>
+    </aside>
+
+    <main class="content" id="content">
+      <section class="col col-remote panel" data-panel="remote">
+        <h2>
+          <span class="col-tag remote">REMOTE</span>
+          <span class="col-meta" id="remote-meta"></span>
+          <button class="col-action" id="remote-add" title="add a peer">+</button>
+        </h2>
+        <form class="peer-add-form" id="peer-add-form" hidden>
+          <input type="text" name="name" placeholder="name" autocomplete="off" required>
+          <input type="text" name="host" placeholder="host or IP" autocomplete="off" required>
+          <input type="number" name="port" placeholder="port" min="1" max="65535" autocomplete="off">
+          <div class="peer-add-buttons">
+            <button type="submit" class="btn btn-sm">add</button>
+            <button type="button" class="btn btn-sm" id="peer-add-cancel">cancel</button>
+          </div>
+          <div class="peer-add-error" id="peer-add-error"></div>
+        </form>
+        <div class="remote-grid" id="remote-grid"></div>
+      </section>
+
+      <section class="col col-sessions panel" data-panel="sessions" hidden>
+        <h2><span class="col-tag sessions">SESSIONS</span><span class="col-meta" id="sessions-meta"></span></h2>
+        <div class="sessions-body">
+          <div class="ram-bar" id="ram-bar" title="system RAM">
+            <div class="ram-bar-segs" id="ram-bar-segs"></div>
+          </div>
+          <div class="sessions-list" id="sessions-list"></div>
+        </div>
+      </section>
+
+      <section class="col col-terminal panel" data-panel="terminal" hidden>
+        <h2>
+          <span class="col-tag terminal">TERMINAL</span>
+          <span class="col-meta" id="terminal-meta"></span>
+          <button class="col-action" id="terminal-new" title="new tmux window">+</button>
+        </h2>
+        <div class="term-tabs" id="term-tabs"></div>
+        <div class="term-screen" id="term-screen" tabindex="0" spellcheck="false"></div>
+        <div class="term-hint" id="term-hint"></div>
+      </section>
+
+      <section class="col col-mail panel" data-panel="mail" hidden>
+        <h2>
+          <span class="col-tag mail">MAIL</span>
+          <span class="col-meta" id="mail-meta"></span>
+          <button class="col-action" id="inbox-compose" title="compose new email">+</button>
+        </h2>
+        <form class="inbox-search" id="inbox-search-form" autocomplete="off">
+          <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'>
+          <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
+        </form>
+        <div class="mail-body">
+          <div class="mail-section">
+            <div class="mail-subhead">CALENDAR <span class="col-meta" id="calendar-meta"></span></div>
+            <ul class="list cal-list" id="calendar-list"></ul>
+          </div>
+          <div class="mail-section mail-inbox">
+            <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
+            <ul class="list" id="inbox-list"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div class="modal" id="compose-modal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="compose-title">
