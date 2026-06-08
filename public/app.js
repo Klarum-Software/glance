@@ -7,7 +7,7 @@ const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); re
 
 const TERM_POLL_MS  = 1200;
 
-const PANELS       = ["remote", "sessions", "terminal", "mail", "settings"];
+const PANELS       = ["remote", "sessions", "terminal", "prod", "mail", "settings"];
 const PANEL_KEY    = "glance.panel";
 const COLLAPSE_KEY = "glance.sidebar.collapsed";
 
@@ -191,6 +191,69 @@ function renderRemote(r) {
   const online = r.peers.filter(p => p.online).length;
   meta.textContent = `· ${online}/${r.peers.length} online`;
   for (const p of r.peers) grid.appendChild(renderPeerRow(p));
+}
+
+const PROD_STATUS_CLASS = { succeeded: "ok", failed: "bad", running: "warn", skipped: "skip" };
+
+function renderProdJob(job) {
+  const variant = PROD_STATUS_CLASS[job.status] || "skip";
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", { class: "tcard-head" },
+        el("span", { class: "tcard-title" }, job.job_id || "—"),
+        el("span", { class: "tcard-value" }, job.status || "—"),
+      ),
+      el("div", { class: "tcard-badges" },
+        el("span", { class: "tcard-badge" }, "ran " + fmtAgo(job.last_run_at)),
+      ),
+    ),
+  );
+}
+
+function renderProd(prod) {
+  const body = $("prod-body");
+  const meta = $("prod-meta");
+  body.replaceChildren();
+
+  const targets = prod?.targets || [];
+  if (!targets.length) {
+    meta.textContent = "· no targets";
+    body.appendChild(el("div", { class: "remote-empty" },
+      el("div", { class: "remote-empty-title" }, "no prod targets configured"),
+      el("div", { class: "remote-empty-hint" },
+        el("span", {}, "Set ", el("code", {}, "prodTargets"), " in config.json."),
+      ),
+    ));
+    return;
+  }
+
+  let failing = 0;
+  for (const t of targets) {
+    const sub = el("div", { class: "mail-subhead" }, t.name);
+    if (t.ok) {
+      sub.appendChild(el("span", { class: "col-meta" }, "· " + fmtAgo(t.generated_at)));
+    } else {
+      sub.appendChild(el("span", { class: "col-meta prod-down" }, "· " + (t.error || "unreachable")));
+    }
+    body.appendChild(sub);
+
+    if (!t.ok) continue;
+    const jobs = t.jobs || [];
+    if (!jobs.length) {
+      body.appendChild(el("div", { class: "prod-empty" }, "no jobs reported"));
+      continue;
+    }
+    for (const job of jobs) {
+      if (job.status === "failed") failing++;
+      body.appendChild(renderProdJob(job));
+    }
+  }
+
+  const reachable = targets.filter(t => t.ok).length;
+  meta.textContent = failing
+    ? `· ${failing} failing`
+    : `· ${reachable}/${targets.length} up`;
 }
 
 function fmtBytes(kb) {
@@ -413,6 +476,7 @@ function render(state) {
   updateNavBadges(state);
   renderRemote(state.remote);
   renderSessions(state);
+  renderProd(state.prod);
   renderTerminalTabs(state.tmux);
   renderCalendar(state.calendar);
   LAST_LIVE_INBOX = state.inbox;
@@ -643,6 +707,12 @@ function updateNavBadges(state) {
   const unread = state.inbox?.unread_count || 0;
   $("nav-badge-mail").textContent = unread ? String(unread) : "";
   document.querySelector('.nav-item[data-panel="mail"]')?.classList.toggle("has-alert", unread > 0);
+
+  const prodTargets = state.prod?.targets || [];
+  const prodFailing = prodTargets.reduce(
+    (n, t) => n + (t.ok ? (t.jobs || []).filter(j => j.status === "failed").length : 1), 0);
+  $("nav-badge-prod").textContent = prodFailing ? String(prodFailing) : "";
+  document.querySelector('.nav-item[data-panel="prod"]')?.classList.toggle("has-alert", prodFailing > 0);
 }
 
 function initSidebar() {
@@ -1142,6 +1212,8 @@ $("terminal-new")?.addEventListener("click", async () => {
     reload();
   } catch (e) { toast("error: " + e.message, 3000); }
 });
+
+$("prod-refresh")?.addEventListener("click", () => reload());
 
 initSidebar();
 initSettings();
