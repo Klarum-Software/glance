@@ -1,40 +1,36 @@
 #!/usr/bin/env node
-// One-time OAuth setup for Google APIs (Calendar + Gmail) from the terminal.
-// The browser dashboard's Settings -> Accounts page does the same thing with a
-// button; this helper is the CLI path (and the only option for a headless or
-// remote instance). Shared OAuth logic lives in google-oauth.js.
+// One-time OAuth setup for Google APIs (Calendar + Gmail). Each user supplies
+// their own OAuth client (created in their own Google Cloud project) so this
+// repo never embeds shared credentials. See docs/CALENDAR-SETUP.md and
+// docs/GMAIL-SETUP.md for the Cloud Console walkthrough.
 //
-// glance uses your own OAuth client, created once in a Google Cloud project
-// (e.g. the klarum-dev client in klarum-internal-tools). Google has stopped
-// letting third-party tools borrow shared/default client IDs for Calendar and
-// Gmail scopes, so bring-your-own-client is the only durable path.
+// Run once:
+//   node server/bin/google-auth.js              # request all default scopes
+//   node server/bin/google-auth.js --calendar   # calendar.readonly only
+//   node server/bin/google-auth.js --gmail      # gmail.modify only
 //
-// Both "Desktop app" and "Web application" clients work. Desktop clients accept
-// any loopback redirect; for a Web client the helper reuses a localhost redirect
-// URI already registered on the client, so that client needs one (any
-// http://localhost[:port][/path]) in its Authorized redirect URIs.
-//
-// The client is auto-loaded from $GLANCE_GOOGLE_CLIENT_FILE, then
-// ~/.config/glance/google-client.json, then a prior token, then an interactive
-// prompt. It also enables the backing APIs (best-effort, via gcloud) and writes
-// calendarBin/gmailBin into config.json so the columns light up after a restart.
-//
-// Run:
-//   node server/bin/google-auth.js               # both scopes
-//   node server/bin/google-auth.js --calendar    # calendar.readonly only
-//   node server/bin/google-auth.js --gmail       # gmail.modify only
+// Saves { client_id, client_secret, refresh_token, access_token, expires_at,
+//        scopes } to ~/.config/glance/google-token.json (mode 600).
 
-const http       = require("http");
-const crypto     = require("crypto");
-const readline   = require("readline");
-const { URL }    = require("url");
-const { spawn, spawnSync } = require("child_process");
+const fs       = require("fs");
+const os       = require("os");
+const path     = require("path");
+const http     = require("http");
+const https    = require("https");
+const crypto   = require("crypto");
+const readline = require("readline");
+const { URL }  = require("url");
+const { spawn } = require("child_process");
 
-const config = require("../config");
-const goauth = require("./google-oauth");
-
+const TOKEN_DIR     = path.join(os.homedir(), ".config", "glance");
+const TOKEN_FILE    = path.join(TOKEN_DIR, "google-token.json");
 const REDIRECT_PORT = 8765;
 const REDIRECT_URI  = `http://127.0.0.1:${REDIRECT_PORT}`;
+
+const SCOPES = {
+  calendar: "https://www.googleapis.com/auth/calendar.readonly",
+  gmail:    "https://www.googleapis.com/auth/gmail.modify",
+};
 
 function parseFlags() {
   const args = process.argv.slice(2);
@@ -55,69 +51,6 @@ function ask(prompt) {
   return new Promise((resolve) => rl.question(prompt, (ans) => { rl.close(); resolve(ans.trim()); }));
 }
 
-// Decide where Google sends the auth code back. Desktop clients accept any
-// loopback port, so we use our own. Web clients (e.g. klarum-dev) only accept a
-// redirect URI registered in the Console, so we reuse a registered loopback one
-// verbatim: same host, port, and path Google will redirect to.
-function resolveRedirect(client) {
-  if (client.type !== "web") {
-    return { uri: REDIRECT_URI, host: "127.0.0.1", port: REDIRECT_PORT };
-  }
-  const loopback = (client.redirectUris || []).find((u) => {
-    try {
-      const x = new URL(u);
-      return x.protocol === "http:" && (x.hostname === "localhost" || x.hostname === "127.0.0.1");
-    } catch { return false; }
-  });
-  if (!loopback) {
-    throw new Error("this Web client has no http://localhost redirect URI registered. "
-      + "Add one in the Console (APIs & Services -> Credentials -> the client -> Authorized "
-      + "redirect URIs), or use a Desktop client.");
-  }
-  const x = new URL(loopback);
-  return { uri: loopback, host: x.hostname, port: Number(x.port) || 80 };
-}
-
-// Auto-load the client; only prompt as a last resort.
-async function loadClient() {
-  const auto = goauth.loadClientFromFiles();
-  if (auto) {
-    console.log(`Using OAuth client ...${auto.clientId.slice(-24)} (${auto.type})`);
-    return auto;
-  }
-  console.log("\nNo client file found. Create an OAuth client in your Cloud project");
-  console.log("and either paste it here or save its JSON to:");
-  console.log("  " + goauth.CLIENT_FILE);
-  console.log("See docs/CALENDAR-SETUP.md.\n");
-  const clientId     = await ask("client_id: ");
-  const clientSecret = await ask("client_secret: ");
-  if (!clientId || !clientSecret) {
-    console.error("client_id and client_secret are required");
-    process.exit(1);
-  }
-  return { clientId, clientSecret, projectId: null, type: "installed", redirectUris: [] };
-}
-
-// Best-effort: turn on the Calendar/Gmail APIs so the first request doesn't
-// 403. Uses gcloud when present; a failure here is non-fatal (the operator may
-// lack serviceusage rights, or the APIs may already be on).
-function enableApis(flags, projectId) {
-  if (spawnSync("gcloud", ["version"], { stdio: "ignore" }).status !== 0) return;
-  const services = [];
-  if (flags.calendar) services.push(goauth.API_SERVICES.calendar);
-  if (flags.gmail)    services.push(goauth.API_SERVICES.gmail);
-  if (!services.length) return;
-  const args = ["services", "enable", ...services];
-  if (projectId) args.push("--project", projectId);
-  console.log(`Enabling APIs${projectId ? ` on ${projectId}` : ""}: ${services.join(", ")}`);
-  const r = spawnSync("gcloud", args, { stdio: "inherit" });
-  if (r.status !== 0) {
-    console.warn("Could not enable APIs automatically; enable them by hand if events never load.\n");
-  } else {
-    console.log("");
-  }
-}
-
 function openUrl(url) {
   const opener = process.platform === "linux"  ? "xdg-open"
               :  process.platform === "darwin" ? "open"
@@ -127,10 +60,10 @@ function openUrl(url) {
   try { spawn(opener, args, { detached: true, stdio: "ignore" }).unref(); } catch {}
 }
 
-function waitForCode(expectedState, redirect) {
+function waitForCode(expectedState) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      const u = new URL(req.url, redirect.uri);
+      const u = new URL(req.url, REDIRECT_URI);
       const code  = u.searchParams.get("code");
       const state = u.searchParams.get("state");
       const err   = u.searchParams.get("error");
@@ -157,36 +90,97 @@ function waitForCode(expectedState, redirect) {
       resolve(code);
     });
     server.on("error", reject);
-    server.listen(redirect.port, redirect.host);
+    server.listen(REDIRECT_PORT, "127.0.0.1");
+  });
+}
+
+function exchangeCode(clientId, clientSecret, code) {
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams({
+      code,
+      client_id:     clientId,
+      client_secret: clientSecret,
+      redirect_uri:  REDIRECT_URI,
+      grant_type:    "authorization_code",
+    }).toString();
+    const req = https.request({
+      hostname: "oauth2.googleapis.com",
+      path:     "/token",
+      method:   "POST",
+      headers:  {
+        "content-type":   "application/x-www-form-urlencoded",
+        "content-length": Buffer.byteLength(body),
+      },
+      timeout:  15000,
+    }, (r) => {
+      const chunks = [];
+      r.on("data", (c) => chunks.push(c));
+      r.on("end", () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (data.error) return reject(new Error(data.error_description || data.error));
+          resolve(data);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(new Error("token exchange timed out")); });
+    req.write(body);
+    req.end();
   });
 }
 
 (async () => {
-  const flags  = parseFlags();
-  const scopes = goauth.scopesForFlags(flags);
+  const flags = parseFlags();
+  const wanted = [];
+  if (flags.calendar) wanted.push(SCOPES.calendar);
+  if (flags.gmail)    wanted.push(SCOPES.gmail);
+  const scopeStr = wanted.join(" ");
 
   console.log("Google OAuth setup for glance.\n");
   console.log("Requesting scopes:");
-  for (const s of scopes) console.log("  " + s);
-  console.log("");
+  for (const s of wanted) console.log("  " + s);
+  console.log("\nPrerequisite: a Google Cloud OAuth 2.0 Client ID of type 'Desktop app'.");
+  console.log("See docs/CALENDAR-SETUP.md or docs/GMAIL-SETUP.md.\n");
 
-  const client   = await loadClient();
-  const redirect = resolveRedirect(client);
-  console.log(`Redirect: ${redirect.uri}\n`);
-  enableApis(flags, client.projectId);
+  let existing = null;
+  try { existing = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")); } catch {}
 
-  const state   = crypto.randomBytes(16).toString("hex");
-  const authUrl = goauth.buildAuthUrl({ clientId: client.clientId, redirectUri: redirect.uri, scopes, state });
+  let clientId, clientSecret;
+  if (existing && existing.client_id && existing.client_secret) {
+    const reuse = await ask(`Reuse client_id ending in ...${existing.client_id.slice(-12)}? [Y/n] `);
+    if (!reuse || /^y/i.test(reuse)) {
+      clientId     = existing.client_id;
+      clientSecret = existing.client_secret;
+    }
+  }
+  if (!clientId) {
+    clientId     = await ask("client_id: ");
+    clientSecret = await ask("client_secret: ");
+  }
+  if (!clientId || !clientSecret) {
+    console.error("client_id and client_secret are required");
+    process.exit(1);
+  }
 
-  console.log("Opening your browser to authorize. If it doesn't open, visit:\n" + authUrl + "\n");
+  const state = crypto.randomBytes(16).toString("hex");
+  const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id:     clientId,
+    redirect_uri:  REDIRECT_URI,
+    response_type: "code",
+    scope:         scopeStr,
+    access_type:   "offline",
+    prompt:        "consent",
+    state,
+  }).toString();
+
+  console.log("\nOpening your browser to authorize. If it doesn't open, visit:\n" + authUrl + "\n");
   openUrl(authUrl);
 
-  const code = await waitForCode(state, redirect);
+  const code = await waitForCode(state);
   console.log("Got authorization code, exchanging for tokens...");
 
-  const tokens = await goauth.exchangeCode({
-    clientId: client.clientId, clientSecret: client.clientSecret, code, redirectUri: redirect.uri,
-  });
+  const tokens = await exchangeCode(clientId, clientSecret, code);
   if (!tokens.refresh_token) {
     console.error("\nNo refresh_token returned. This usually means you've authorized this");
     console.error("client before. Revoke at https://myaccount.google.com/permissions");
@@ -194,10 +188,29 @@ function waitForCode(expectedState, redirect) {
     process.exit(1);
   }
 
-  goauth.writeToken(goauth.tokenFromResponse(client, tokens, scopes, goauth.readToken()));
-  console.log(`\nSaved token to ${goauth.TOKEN_FILE}`);
+  const grantedScopes = (tokens.scope || scopeStr).split(/\s+/).filter(Boolean);
 
-  goauth.setBins(flags, true);
-  console.log(`Wired ${[flags.calendar && "calendarBin", flags.gmail && "gmailBin"].filter(Boolean).join(" + ")} into ${config.CONFIG_FILE}`);
-  console.log("\nRestart the glance backend (kill `node server/server.js`, or disable/enable the extension).");
+  const out = {
+    client_id:     clientId,
+    client_secret: clientSecret,
+    refresh_token: tokens.refresh_token,
+    access_token:  tokens.access_token,
+    expires_at:    Date.now() + (tokens.expires_in || 3600) * 1000,
+    scopes:        grantedScopes,
+  };
+
+  fs.mkdirSync(TOKEN_DIR, { recursive: true });
+  const tmp = TOKEN_FILE + ".tmp-" + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, TOKEN_FILE);
+  console.log(`\nSaved token to ${TOKEN_FILE}`);
+
+  const hints = [];
+  if (flags.calendar) hints.push(`  "calendarBin": "${path.resolve(__dirname, "gcal.js")}"`);
+  if (flags.gmail)    hints.push(`  "gmailBin":    "${path.resolve(__dirname, "gmail.js")}"`);
+  console.log("\nNow add these to ~/.config/glance/config.json:");
+  console.log("{");
+  console.log(hints.join(",\n"));
+  console.log("}\n");
+  console.log("Then restart the glance backend (disable/enable the extension).");
 })().catch((e) => { console.error("Error:", e.message); process.exit(1); });

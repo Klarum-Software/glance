@@ -7,7 +7,7 @@ const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); re
 
 const TERM_POLL_MS  = 1200;
 
-const PANELS       = ["remote", "sessions", "terminal", "mail", "settings"];
+const PANELS       = ["remote", "sessions", "terminal", "mail"];
 const PANEL_KEY    = "glance.panel";
 const COLLAPSE_KEY = "glance.sidebar.collapsed";
 
@@ -622,8 +622,6 @@ function setActivePanel(name) {
   localStorage.setItem(PANEL_KEY, name);
   // The terminal only paints while visible; refresh it the moment it shows.
   if (name === "terminal") { captureTerminal(); $("term-screen")?.focus(); }
-  // Settings sections are fetched on demand so they're always fresh when shown.
-  if (name === "settings") renderSettingsSection(activeSettingsSection());
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -654,244 +652,6 @@ function initSidebar() {
   $("side-toggle")?.addEventListener("click", () => {
     setSidebarCollapsed(!$("sidebar").classList.contains("collapsed"));
   });
-}
-
-// ── settings panel ──────────────────────────────────────────────────────────
-
-const SETTINGS_SEC_KEY = "glance.settings.sec";
-const SETTINGS_SECS    = ["accounts", "peers", "inbox", "appearance"];
-
-function activeSettingsSection() {
-  const s = localStorage.getItem(SETTINGS_SEC_KEY);
-  return SETTINGS_SECS.includes(s) ? s : "accounts";
-}
-
-function setSettingsSection(sec) {
-  if (!SETTINGS_SECS.includes(sec)) sec = "accounts";
-  localStorage.setItem(SETTINGS_SEC_KEY, sec);
-  renderSettingsSection(sec);
-}
-
-function renderSettingsSection(sec) {
-  for (const b of document.querySelectorAll(".set-nav-item")) b.classList.toggle("active", b.dataset.sec === sec);
-  if (sec === "peers")           renderPeersSection();
-  else if (sec === "inbox")      renderInboxSection();
-  else if (sec === "appearance") renderAppearanceSection();
-  else                           renderAccountsSection();
-}
-
-function sectionHead(title, desc) {
-  return el("div", { class: "set-section-head" }, el("h3", {}, title), desc ? el("p", {}, desc) : null);
-}
-
-function statusPill(on, label) {
-  return el("span", { class: "set-pill " + (on ? "on" : "off") }, el("i", {}), label);
-}
-
-function googleGlyph() {
-  return el("span", { class: "set-row-icon", html:
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>' });
-}
-
-let GOOGLE_BUSY = false;
-
-async function renderAccountsSection() {
-  const body = $("settings-body");
-  body.replaceChildren(sectionHead("Connected accounts",
-    "Connect Google so the CALENDAR and INBOX columns light up. The token stays on this machine, mode 600."));
-
-  let st;
-  try { st = await fetch("/api/google/status", { cache: "no-store" }).then(r => r.json()); }
-  catch (e) { body.appendChild(el("div", { class: "set-banner" }, "Could not load status: " + e.message)); return; }
-
-  if (!st.client_present) {
-    body.appendChild(el("div", { class: "set-banner" },
-      "No OAuth client found. Save the client JSON (e.g. klarum-dev) to ",
-      el("span", { class: "set-mono" }, "~/.config/glance/google-client.json"),
-      ", then reload. See docs/CALENDAR-SETUP.md."));
-  }
-
-  const rows = [
-    { key: "calendar", title: "Google Calendar", desc: "Upcoming events in the CALENDAR column." },
-    { key: "gmail",    title: "Gmail",            desc: "Unread mail, read/reply/send in the INBOX column." },
-  ];
-  const card = el("div", { class: "set-card" });
-  for (const r of rows) {
-    const surf = st[r.key] || {};
-    const connected = surf.authorized && surf.wired;
-    const descTxt = connected ? (st.email ? `Connected as ${st.email}.` : "Connected.")
-                  : surf.authorized ? "Authorized, currently off." : r.desc;
-    const actions = el("div", { class: "set-row-actions" }, statusPill(connected, connected ? "Connected" : "Off"));
-    if (connected) {
-      actions.appendChild(el("button", { class: "btn btn-sm btn-danger", on: { click: () => googleDisconnect(r.key) } }, "Disconnect"));
-    } else {
-      actions.appendChild(el("button", { class: "btn btn-sm btn-accent", on: { click: () => googleConnect(r.key) } },
-        surf.authorized ? "Enable" : "Connect"));
-    }
-    card.appendChild(el("div", { class: "set-row" },
-      el("div", { class: "set-row-main" }, googleGlyph(),
-        el("div", { class: "set-row-text" },
-          el("div", { class: "set-row-title" }, r.title),
-          el("div", { class: "set-row-desc" }, descTxt))),
-      actions));
-  }
-  body.appendChild(card);
-
-  if (st.email || st.calendar.authorized || st.gmail.authorized) {
-    body.appendChild(el("div", { class: "set-row-actions", style: "margin-top:12px" },
-      el("button", { class: "btn btn-sm btn-danger", on: { click: googleRemoveAccount } }, "Remove account")));
-  }
-  body.appendChild(el("div", { class: "set-foot-note" },
-    "Connect opens Google in this tab and returns here. Works from localhost; for a remote instance use ",
-    el("span", { class: "set-mono" }, "node server/bin/google-auth.js"), "."));
-}
-
-async function googleConnect(target) {
-  if (GOOGLE_BUSY) return;
-  GOOGLE_BUSY = true;
-  try {
-    const r = await fetch("/api/google/connect", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) { toast(j.error || `connect failed (${r.status})`, 6000); return; }
-    if (j.mode === "redirect") { window.location.href = j.url; return; }
-    toast(target === "calendar" ? "Calendar connected" : "Gmail connected");
-    renderAccountsSection();
-  } catch (e) { toast("connect failed: " + e.message, 5000); }
-  finally { GOOGLE_BUSY = false; }
-}
-
-async function googleDisconnect(target) {
-  try {
-    const r = await fetch("/api/google/disconnect", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) { toast(j.error || "disconnect failed", 4000); return; }
-    toast("disconnected");
-    renderAccountsSection();
-  } catch (e) { toast("disconnect failed: " + e.message, 4000); }
-}
-
-async function googleRemoveAccount() {
-  if (!confirm("Remove the Google account? This deletes the saved token and revokes access.")) return;
-  try {
-    const r = await fetch("/api/google/remove", { method: "POST" });
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) { toast("remove failed", 4000); return; }
-    toast("account removed");
-    renderAccountsSection();
-  } catch (e) { toast("remove failed: " + e.message, 4000); }
-}
-
-async function renderPeersSection() {
-  const body = $("settings-body");
-  body.replaceChildren(sectionHead("Peers",
-    "Manually-added tailnet peers, shown in REMOTE alongside auto-discovered ones."));
-  let peers = [];
-  try { peers = (await fetch("/api/config/peers", { cache: "no-store" }).then(r => r.json())).peers || []; }
-  catch (e) { body.appendChild(el("div", { class: "set-banner" }, "Could not load peers: " + e.message)); return; }
-
-  const card = el("div", { class: "set-card" });
-  if (!peers.length) card.appendChild(el("div", { class: "set-empty" }, "No manual peers added."));
-  for (const p of peers) {
-    card.appendChild(el("div", { class: "set-row" },
-      el("div", { class: "set-row-main" }, el("div", { class: "set-row-text" },
-        el("div", { class: "set-row-title" }, p.name || p.host),
-        el("div", { class: "set-row-desc" }, `${p.host}${p.port ? ":" + p.port : ""}`))),
-      el("div", { class: "set-row-actions" },
-        el("button", { class: "btn btn-sm btn-danger", on: { click: () => settingsRemovePeer(p.name || p.host) } }, "Remove"))));
-  }
-  body.appendChild(card);
-  body.appendChild(el("form", { class: "set-add-form", on: { submit: settingsAddPeer } },
-    el("input", { type: "text", name: "name", placeholder: "name", autocomplete: "off", required: "" }),
-    el("input", { type: "text", name: "host", placeholder: "host or IP", autocomplete: "off", required: "" }),
-    el("input", { type: "number", name: "port", placeholder: "port", min: "1", max: "65535", autocomplete: "off" }),
-    el("button", { class: "btn btn-sm", type: "submit" }, "Add peer")));
-}
-
-async function settingsAddPeer(ev) {
-  ev.preventDefault();
-  const data = new FormData(ev.target);
-  const body = { name: (data.get("name") || "").toString().trim(), host: (data.get("host") || "").toString().trim() };
-  const portRaw = (data.get("port") || "").toString().trim();
-  if (portRaw) body.port = Number(portRaw);
-  try {
-    const r = await fetch("/api/config/peers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) { toast(j.error || `add failed (${r.status})`, 4000); return; }
-    toast(`added ${body.name}`);
-    renderPeersSection();
-    reload();
-  } catch (e) { toast("add failed: " + e.message, 4000); }
-}
-
-async function settingsRemovePeer(name) {
-  if (!name || !confirm(`Remove peer "${name}"?`)) return;
-  try {
-    const r = await fetch("/api/config/peers/" + encodeURIComponent(name), { method: "DELETE" });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) { toast(j.error || "remove failed", 4000); return; }
-    toast(`removed ${name}`);
-    renderPeersSection();
-    reload();
-  } catch (e) { toast("remove failed: " + e.message, 4000); }
-}
-
-async function renderInboxSection() {
-  const body = $("settings-body");
-  body.replaceChildren(sectionHead("Inbox",
-    "How the INBOX column filters mail. Edit these in ~/.config/glance/config.json."));
-  let s;
-  try { s = await fetch("/api/inbox/settings", { cache: "no-store" }).then(r => r.json()); }
-  catch (e) { body.appendChild(el("div", { class: "set-banner" }, "Could not load: " + e.message)); return; }
-  const team = s.team_emails || [];
-  body.appendChild(el("div", { class: "set-card" },
-    el("div", { class: "set-row" }, el("dl", { class: "set-kv" },
-      el("dt", {}, "important only"), el("dd", {}, String(!!s.important_only)),
-      el("dt", {}, "summarizer"),     el("dd", {}, s.has_summarizer ? "configured" : "built-in heuristic"),
-      el("dt", {}, "team emails"),    el("dd", {}, team.length ? team.join(", ") : "none"),
-      el("dt", {}, "snippets"),       el("dd", {}, String(Object.keys(s.snippets || {}).length))))));
-}
-
-function renderAppearanceSection() {
-  const body = $("settings-body");
-  body.replaceChildren(sectionHead("Appearance", "Theme and saved dashboard layout state."));
-  body.appendChild(el("div", { class: "set-card" },
-    el("div", { class: "set-row" },
-      el("div", { class: "set-row-main" }, el("div", { class: "set-row-text" },
-        el("div", { class: "set-row-title" }, "Theme"),
-        el("div", { class: "set-row-desc" }, "Pivi dark. The one built-in theme."))),
-      el("div", { class: "set-row-actions" }, statusPill(true, "Active"))),
-    el("div", { class: "set-row" },
-      el("div", { class: "set-row-main" }, el("div", { class: "set-row-text" },
-        el("div", { class: "set-row-title" }, "Reset layout state"),
-        el("div", { class: "set-row-desc" }, "Clears saved sidebar collapse and active panel."))),
-      el("div", { class: "set-row-actions" },
-        el("button", { class: "btn btn-sm", on: { click: () => {
-          localStorage.removeItem(COLLAPSE_KEY);
-          localStorage.removeItem(PANEL_KEY);
-          localStorage.removeItem(SETTINGS_SEC_KEY);
-          setSidebarCollapsed(false);
-          toast("layout reset");
-        } } }, "Reset")))));
-}
-
-function initSettings() {
-  for (const b of document.querySelectorAll(".set-nav-item")) {
-    b.addEventListener("click", () => setSettingsSection(b.dataset.sec));
-    b.classList.toggle("active", b.dataset.sec === activeSettingsSection());
-  }
-}
-
-// After a browser connect round-trip the backend redirects to /?panel=settings
-// &connected=1; surface that and clean the URL so a reload doesn't re-toast.
-function handleConnectReturn() {
-  const q = new URLSearchParams(location.search);
-  if (q.get("connected")) toast("Google connected");
-  if (q.get("panel") === "settings") setActivePanel("settings");
-  if (q.has("connected") || q.has("panel")) history.replaceState(null, "", location.pathname);
 }
 
 // ── peer add/remove UI ────────────────────────────────────────────────────
@@ -1144,8 +904,6 @@ $("terminal-new")?.addEventListener("click", async () => {
 });
 
 initSidebar();
-initSettings();
-handleConnectReturn();
 
 // ── main loop ─────────────────────────────────────────────────────────────
 

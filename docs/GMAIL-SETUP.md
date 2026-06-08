@@ -9,17 +9,13 @@ consent screen, one token file on disk.
 
 ## 1. OAuth client (skip if already set up for Calendar)
 
-Follow [CALENDAR-SETUP.md](CALENDAR-SETUP.md) sections 1-2 to create a Desktop
-OAuth client in your Google Cloud project and drop its downloaded JSON at
-`~/.config/glance/google-client.json`. The same client works for both APIs.
+Follow [CALENDAR-SETUP.md](CALENDAR-SETUP.md) section 1 to create a Desktop
+OAuth client in your Google Cloud project. Same client_id and client_secret
+work for both APIs.
 
-`gmail.modify` is a restricted scope. Within a Workspace org with an Internal
-consent screen this is fine; an External app stays in "Testing" and only the
-listed test users can grant it.
+You also need to enable the Gmail API in the same project:
 
-You also need the Gmail API enabled in the same project. The helper tries this
-for you via gcloud; the manual fallback is APIs & Services -> Library -> search
-"Gmail API" -> Enable.
+- APIs & Services -> Library -> search "Gmail API" -> Enable.
 
 ## 2. Run the auth helper
 
@@ -27,23 +23,25 @@ for you via gcloud; the manual fallback is APIs & Services -> Library -> search
 node server/bin/google-auth.js --gmail
 ```
 
-The helper auto-loads the client file (no pasting). If you already have a
-`~/.config/glance/google-token.json` and no client file, it offers to reuse
-that client instead. To request both scopes in one go:
+If you already have a `~/.config/glance/google-token.json` with calendar
+scope, the helper prompts you to reuse the client_id; press Enter and it
+will only ask Google for the Gmail scope (alongside whatever you already
+have).
+
+To request both scopes in one go:
 
 ```
 node server/bin/google-auth.js
 ```
 
 The browser tab opens for consent; click Allow. The token file is overwritten
-with the new refresh_token and the granted `scopes` array, and `gmailBin` is
-wired into `config.json` automatically. (Google issues a new refresh_token on
-every consent prompt, so let the prompt complete.)
+with the new refresh_token and the granted `scopes` array. (Google issues a
+new refresh_token on every consent prompt, so make sure to allow the prompt
+to complete.)
 
-## 3. config.json reference
+## 3. Wire it up
 
-The helper wires `gmailBin` for you. The other Gmail keys are optional tuning
-you set by hand in `~/.config/glance/config.json`:
+Add to `~/.config/glance/config.json`:
 
 ```json
 {
