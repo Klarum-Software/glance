@@ -672,26 +672,133 @@ html, body {
   align-items: baseline;
 }
 .mail-section:first-child .mail-subhead { border-top: none; }
-.cal-list { flex: 0 1 auto; max-height: 38%; }
-
-.cal-day {
-  font-size: 10px;
-  color: var(--ink-4);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 3px 6px 0;
+/* Calendar as a pivi timeline (see pivi timeline-canvas chips + x-axis
+   labels): day heads in mono uppercase with today in brand, a hairline spine
+   through each day's events, 6px nodes, chip rows with the 3px stripe, and a
+   dashed brand "now" marker inside today. */
+.cal-tl {
+  flex: 0 1 auto;
+  /* vh, not %: the section's height is content-driven, so a percentage
+     max-height has no definite basis and collapses the scroll area. */
+  max-height: 38vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-2) transparent;
+  padding: 2px 0 4px;
 }
-.cal-event { display: flex; gap: 8px; padding: 2px 6px; min-height: var(--row-h); align-items: center; }
-.cal-time {
-  font-family: var(--font-mono);
+.cal-tl::-webkit-scrollbar { width: 7px; }
+.cal-tl::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 3px; }
+
+.cal-tl-day { padding: 2px 0 4px; }
+.cal-tl-dayhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px 2px;
+}
+.cal-tl-daylabel {
   font-size: 11px;
+  font-weight: 600;
   color: var(--ink-2);
-  /* Wide enough for the "all day" label; a 40px box let it overflow into the
-     flex gap and butt against the summary ("all dayOffice"). */
+  text-transform: lowercase;
+}
+.cal-tl-day.today .cal-tl-daylabel { color: var(--brand); }
+.cal-tl-daysub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-4);
+}
+
+/* Spine runs through the node column: time(52) + gap(8) + node-center(3). */
+.cal-tl-events { position: relative; }
+.cal-tl-events::before {
+  content: "";
+  position: absolute;
+  left: 69px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--rule-3);
+}
+
+.cal-tl-ev {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  min-height: var(--row-h);
+  position: relative;
+}
+.cal-tl-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
   width: 52px;
+  text-align: right;
   flex-shrink: 0;
 }
-.cal-summary { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.cal-tl-ev.soon .cal-tl-time { color: var(--warn); font-weight: 600; }
+.cal-tl-node {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 1px solid var(--ink-3);
+  flex-shrink: 0;
+  z-index: 1;
+}
+.cal-tl-ev.soon .cal-tl-node { border-color: var(--warn); background: var(--warn); }
+.cal-tl-ev.past .cal-tl-node { border-color: var(--ink-5); }
+.cal-tl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+  box-shadow: 0 1px 2px rgba(14,14,16,0.04);
+  transition: background 80ms, border-color 80ms;
+}
+.cal-tl-chip:hover { border-color: var(--ink-3); background: var(--paper-2); }
+.cal-tl-stripe {
+  width: 3px; height: 14px;
+  border-radius: 2px;
+  background: var(--mail);
+  flex-shrink: 0;
+}
+.cal-tl-ev.soon .cal-tl-stripe { background: var(--warn); }
+.cal-tl-summary {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-tl-ev.past { opacity: 0.45; }
+
+.cal-tl-nowrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  height: 10px;
+}
+.cal-tl-time.now {
+  color: var(--brand);
+  font-weight: 600;
+  width: 52px;
+  text-align: right;
+}
+.cal-tl-nowline {
+  flex: 1;
+  height: 0;
+  border-top: 1px dashed var(--brand);
+  opacity: 0.85;
+}
 
 .inbox-row {
   display: grid;
