@@ -686,7 +686,9 @@ html, body {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-2);
-  width: 40px;
+  /* Wide enough for the "all day" label; a 40px box let it overflow into the
+     flex gap and butt against the summary ("all dayOffice"). */
+  width: 52px;
   flex-shrink: 0;
 }
 .cal-summary { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }

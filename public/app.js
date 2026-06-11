@@ -489,7 +489,7 @@ function render(state) {
 // presses inside the screen are forwarded to tmux via /api/tmux/send, then we
 // re-capture quickly so typing feels responsive.
 
-const TERM = { window: null, exists: false, polling: false, lastContent: null };
+const TERM = { window: null, exists: false, polling: false, failed: false, lastContent: null };
 
 // SGR colorizer for `tmux capture-pane -e` output. We render to spans with
 // inline styles; standard xterm palette so claude's TUI looks like it does in
@@ -615,10 +615,18 @@ function renderTerminalTabsSelection() {
 
 async function captureTerminal() {
   if (TERM.window == null || !TERM.exists) return;
+  // Three sources fire this (steady poll, window select, state reload); without
+  // an in-flight guard two captures can resolve out of order and repaint stale
+  // content over fresh.
+  if (TERM.polling) return;
+  TERM.polling = true;
   try {
     const r = await fetch(`/api/tmux/capture?window=${TERM.window}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(`capture ${r.status}`);
     const j = await r.json();
-    if (!j.ok || j.window !== TERM.window) return;
+    if (!j.ok) throw new Error(j.error || "capture failed");
+    if (j.window !== TERM.window) return;
+    TERM.failed = false;
     // Trim trailing blank lines so the prompt sits at the bottom, not buried.
     const content = (j.content || "").replace(/\n+$/g, "");
     if (content === TERM.lastContent) return;
@@ -627,20 +635,28 @@ async function captureTerminal() {
     const atBottom = screen.scrollTop + screen.clientHeight >= screen.scrollHeight - 8;
     screen.innerHTML = ansiToHtml(content);
     if (atBottom) screen.scrollTop = screen.scrollHeight;
-  } catch {}
+  } catch {
+    // Toast once on the ok->failed transition, not every poll tick.
+    if (!TERM.failed) { TERM.failed = true; toast("terminal capture failed", 2500); }
+  } finally {
+    TERM.polling = false;
+  }
 }
 
 async function sendTerminal(payload) {
   if (TERM.window == null || !TERM.exists) return;
   try {
-    await fetch("/api/tmux/send", {
+    const r = await fetch("/api/tmux/send", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ window: TERM.window, ...payload }),
     });
+    if (!r.ok) throw new Error(`send ${r.status}`);
     // Re-capture quickly for a responsive echo, on top of the steady poll.
     setTimeout(captureTerminal, 60);
-  } catch {}
+  } catch {
+    toast("terminal send failed", 2000);
+  }
 }
 
 // Translate a keydown into a tmux send-keys payload. Printable characters go as
@@ -1233,7 +1249,11 @@ async function reload() {
 
 loadInboxSettings();
 reload();
-setInterval(reload, REFRESH_MS);
+// Skip the full /api/state cycle while the tab is backgrounded (it shells out
+// to tailscale/tmux/gmail); refresh immediately when it comes back so the data
+// isn't stale on return.
+setInterval(() => { if (!document.hidden) reload(); }, REFRESH_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) reload(); });
 
 // Faster, lighter poll just for the focused tmux pane so typing feels live
 // without dragging the whole /api/state cycle down to 1s.
