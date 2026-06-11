@@ -130,7 +130,20 @@
             <ul class="list cal-list" id="calendar-list"></ul>
           </div>
           <div class="mail-section mail-inbox">
-            <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
+            <div class="mail-subhead">
+              <input type="checkbox" class="inbox-check" id="inbox-select-all" title="select all">
+              INBOX <span class="col-meta" id="inbox-meta"></span>
+            </div>
+            <div class="inbox-bulkbar" id="inbox-bulkbar" hidden>
+              <span class="inbox-bulk-count" id="inbox-bulk-count"></span>
+              <button class="btn btn-xs" data-bulk="read">mark read</button>
+              <button class="btn btn-xs" data-bulk="archive">archive</button>
+              <select class="inbox-bulk-move" id="inbox-bulk-move">
+                <option value="">move to...</option>
+              </select>
+              <button class="btn btn-xs btn-danger" data-bulk="trash">delete</button>
+              <button class="btn btn-xs" data-bulk="clear">clear</button>
+            </div>
             <ul class="list" id="inbox-list"></ul>
           </div>
         </div>

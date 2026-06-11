@@ -12,6 +12,9 @@
 //                               returns its stdout; otherwise heuristic (no LLM).
 //   send                        reads JSON from stdin {to, subject, body, cc?, bcc?, reply_to_id?}
 //   mark <id> <read|archive|trash>
+//   labels                      user-defined labels. TSV: id<TAB>name
+//   batch <action> <id,id,...>  bulk mark via batchModify (one API call).
+//                               action: read | archive | trash | move:<labelId>
 //
 // Errors print to stderr; exit code != 0 on failure.
 
@@ -375,6 +378,45 @@ async function cmdMark(tok, id, action) {
   process.stdout.write(JSON.stringify({ ok: true }) + "\n");
 }
 
+async function cmdLabels(tok) {
+  const resp = await gmailRequest(tok, { path: "/gmail/v1/users/me/labels" });
+  for (const l of resp.labels || []) {
+    if (l.type !== "user") continue;
+    process.stdout.write(`${l.id}\t${(l.name || "").replace(/[\t\n]/g, " ")}\n`);
+  }
+}
+
+const LABEL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const MSG_ID_RE   = /^[a-zA-Z0-9_-]{1,64}$/;
+
+// One users.messages.batchModify call for the whole selection (up to 1000
+// ids per the API; we stay well under). "move" is Gmail's folder model:
+// add the target label, drop INBOX.
+async function cmdBatch(tok, action, idsCsv) {
+  if (!action || !idsCsv) throw new Error("usage: gmail.js batch <read|archive|trash|move:<labelId>> <id,id,...>");
+  const ids = idsCsv.split(",").map(s => s.trim()).filter(Boolean);
+  if (!ids.length || ids.length > 200) throw new Error("1..200 ids required");
+  for (const id of ids) if (!MSG_ID_RE.test(id)) throw new Error(`bad message id: ${id}`);
+
+  let body;
+  if (action === "read")         body = { ids, removeLabelIds: ["UNREAD"] };
+  else if (action === "archive") body = { ids, removeLabelIds: ["INBOX"] };
+  else if (action === "trash")   body = { ids, addLabelIds: ["TRASH"], removeLabelIds: ["INBOX"] };
+  else if (action.startsWith("move:")) {
+    const label = action.slice(5);
+    if (!LABEL_ID_RE.test(label)) throw new Error(`bad label id: ${label}`);
+    body = { ids, addLabelIds: [label], removeLabelIds: ["INBOX"] };
+  } else {
+    throw new Error(`unknown batch action: ${action}`);
+  }
+
+  await gmailRequest(tok,
+    { method: "POST", path: "/gmail/v1/users/me/messages/batchModify", headers: { "content-type": "application/json" } },
+    Buffer.from(JSON.stringify(body), "utf8"),
+  );
+  process.stdout.write(JSON.stringify({ ok: true, count: ids.length }) + "\n");
+}
+
 (async () => {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) {
@@ -397,6 +439,8 @@ async function cmdMark(tok, id, action) {
     case "summarize": return cmdSummarize(tok, rest[0]);
     case "send":      return cmdSend(tok);
     case "mark":      return cmdMark(tok, rest[0], rest[1]);
+    case "labels":    return cmdLabels(tok);
+    case "batch":     return cmdBatch(tok, rest[0], rest[1]);
     default:
       console.error(`unknown subcommand: ${cmd}`);
       process.exit(2);
