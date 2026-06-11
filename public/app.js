@@ -142,30 +142,24 @@ function renderPeerRow(p) {
     : "—";
   const loadTxt = typeof s.load_1m === "number" ? s.load_1m.toFixed(2) : "—";
   const memTxt  = s.mem_pct != null ? `${s.mem_pct}%` : "—";
+  const memCls  = s.mem_pct >= 85 ? " hot" : s.mem_pct >= 70 ? " warm" : "";
+
+  const cell = (key, valTxt, opts = {}) => el("div", { class: "peer-cell" + (opts.wide ? " wide" : "") },
+    el("span", { class: "peer-key" }, key),
+    el("span", { class: "peer-val" + (opts.cls || ""), title: opts.title || "" }, valTxt),
+    opts.spark ? el("span", { class: "peer-spark", title: opts.sparkTitle || "" }, opts.spark) : null,
+  );
 
   return card(p.is_self ? "self" : "",
     head,
     el("div", { class: "peer-grid" },
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "up"),
-        el("span", { class: "peer-val" }, fmtUptime(s.uptime_s)),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "load"),
-        el("span", { class: "peer-val" }, `${loadTxt} · mem ${memTxt}`),
-      ),
-      el("div", { class: "peer-cell wide" },
-        el("span", { class: "peer-key" }, "tmux"),
-        el("span", { class: "peer-val" }, sessTxt),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "git"),
-        el("span", { class: "peer-val" }, gitTxt),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "claude"),
-        el("span", { class: "peer-val claude-procs" }, `${claudeRunning} running`),
-      ),
+      cell("up",     fmtUptime(s.uptime_s)),
+      cell("load",   loadTxt, { spark: s.spark_load, sparkTitle: "1m load, recent samples" }),
+      cell("mem",    memTxt,  { cls: memCls, spark: s.spark_mem, sparkTitle: "memory %, recent samples" }),
+      cell("claude", claudeRunning ? `${claudeRunning} running` : "idle",
+        { cls: claudeRunning ? " claude-procs" : "" }),
+      cell("tmux",   sessTxt, { wide: true, title: sessTxt }),
+      cell("git",    gitTxt,  { wide: true, title: gitTxt }),
     ),
   );
 }
