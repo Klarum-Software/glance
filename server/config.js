@@ -75,6 +75,10 @@ const DEFAULTS = {
   // so we cache in-memory and refetch at most once per TTL no matter how many
   // dashboard clients are polling /api/state.
   prodRefreshSec: 30,
+  // SSE fast-lane tick (seconds): how often claude sessions are rescanned and
+  // pushed to /api/events subscribers (remote presence + tmux go every other
+  // tick). Only runs while a subscriber is connected.
+  liveRefreshSec: 3,
 };
 
 function load() {
@@ -101,6 +105,7 @@ function load() {
     try { env.prodTargets = JSON.parse(process.env.GLANCE_PROD_TARGETS); } catch { /* keep file/default */ }
   }
   if (process.env.GLANCE_PROD_REFRESH_SEC) env.prodRefreshSec = Number(process.env.GLANCE_PROD_REFRESH_SEC);
+  if (process.env.GLANCE_LIVE_REFRESH_SEC) env.liveRefreshSec = Number(process.env.GLANCE_LIVE_REFRESH_SEC);
 
   return { ...DEFAULTS, ...user, ...env };
 }

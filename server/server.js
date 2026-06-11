@@ -678,6 +678,48 @@ function gatherMemory() {
 // `claude` whose parent is not also `claude` is one user-facing session;
 // its descendants count toward that session's RSS. Worktree detection: walk
 // the session's cwd up looking for a .git pointing into a `worktrees/` gitdir.
+//
+// cwd (lsof) and git metadata (two rev-parse spawns) dominate the scan cost
+// and are stable for a session's lifetime, so both are cached by pid/cwd.
+// That keeps the SSE fast lane's repeat scans down to a single `ps`.
+const SESSION_CWD_CACHE = new Map();  // pid → { cwd, t }
+const SESSION_GIT_CACHE = new Map();  // cwd → { worktree, project, top, t }
+const SESSION_META_TTL_MS = 5 * 60_000;
+
+function cachedSessionCwd(pid) {
+  const hit = SESSION_CWD_CACHE.get(pid);
+  if (hit && Date.now() - hit.t < SESSION_META_TTL_MS) return hit.cwd;
+  const cwd = platform.processCwd(pid);
+  SESSION_CWD_CACHE.set(pid, { cwd, t: Date.now() });
+  return cwd;
+}
+
+function cachedSessionGit(cwd) {
+  const hit = SESSION_GIT_CACHE.get(cwd);
+  if (hit && Date.now() - hit.t < SESSION_META_TTL_MS) return hit;
+  let out = { worktree: false, project: null, top: null, t: Date.now() };
+  try {
+    const gitDir = execSync(`git -C "${cwd}" rev-parse --git-dir`, {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const top = execSync(`git -C "${cwd}" rev-parse --show-toplevel`, {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    out = { worktree: /[\\/]worktrees[\\/]/.test(gitDir), project: path.basename(top), top, t: Date.now() };
+  } catch {}
+  SESSION_GIT_CACHE.set(cwd, out);
+  return out;
+}
+
+function sweepSessionCaches(livePids) {
+  for (const pid of SESSION_CWD_CACHE.keys()) {
+    if (!livePids.has(pid)) SESSION_CWD_CACHE.delete(pid);
+  }
+  // cwd keys are unbounded across many short-lived sessions; a rare full
+  // reset is cheaper than tracking reference counts.
+  if (SESSION_GIT_CACHE.size > 200) SESSION_GIT_CACHE.clear();
+}
+
 function gatherSessions() {
   const procs = platform.processList();
   if (!procs.length) return [];
@@ -708,23 +750,16 @@ function gatherSessions() {
     const total_rss_kb = tree.reduce((s, p) => s + p.rss_kb, 0);
     const subagents = tree.filter((p) => p !== root && isClaude(p)).length;
 
-    const cwd = platform.processCwd(root.pid);
+    const cwd = cachedSessionCwd(root.pid);
     let worktree = false;
     let project = null;
     let rel = null;
     if (cwd) {
-      try {
-        const gitDir = execSync(`git -C "${cwd}" rev-parse --git-dir`, {
-          encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        worktree = /[\\/]worktrees[\\/]/.test(gitDir);
-        const top = execSync(`git -C "${cwd}" rev-parse --show-toplevel`, {
-          encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        project = path.basename(top);
-        // Repo-relative path: "pivi" at the root, "pivi/gateway" below it.
-        rel = project + cwd.slice(top.length);
-      } catch {}
+      const git = cachedSessionGit(cwd);
+      worktree = git.worktree;
+      project = git.project;
+      // Repo-relative path: "pivi" at the root, "pivi/gateway" below it.
+      if (git.top) rel = git.project + cwd.slice(git.top.length);
     }
 
     const home = process.env.HOME || process.env.USERPROFILE || "";
@@ -744,7 +779,88 @@ function gatherSessions() {
   });
 
   sessions.sort((a, b) => b.rss_kb - a.rss_kb);
+  sweepSessionCaches(new Set(roots.map(r => r.pid)));
   return sessions;
+}
+
+// ── live events (SSE) ───────────────────────────────────────────────────────
+// Push channel so claude-session / peer / tmux changes show up in seconds
+// instead of riding the dashboard's 30s /api/state poll. Zero-dep: plain
+// text/event-stream over the same localhost/tailnet listeners. The fast lane
+// only runs while at least one client is connected, scans sessions every
+// liveRefreshSec (cheap after the cwd/git caches above: one `ps`), and does
+// the heavier remote-presence + tmux sweep every other tick. Frames go out
+// only when the payload actually changed.
+
+const sseClients = new Set();
+let liveTimer = null;
+let liveTick  = 0;
+let liveBusy  = false;
+const liveLast = new Map();  // event name → last serialized payload
+
+function sseBroadcast(event, payload) {
+  const data = JSON.stringify(payload);
+  if (liveLast.get(event) === data) return;
+  liveLast.set(event, data);
+  const frame = `event: ${event}\ndata: ${data}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(frame); } catch { sseClients.delete(res); }
+  }
+}
+
+async function liveTickFn() {
+  if (!sseClients.size || liveBusy) return;
+  liveBusy = true;
+  liveTick++;
+  try {
+    sseBroadcast("sessions", { sessions: gatherSessions(), memory: gatherMemory() });
+    if (liveTick % 2 === 0) {
+      const [remote, tmux] = await Promise.all([gatherRemote(), tmuxListWindows()]);
+      sseBroadcast("remote", remote);
+      sseBroadcast("tmux", tmux);
+    }
+    // Comment frame as a keepalive so idle streams aren't reaped by proxies
+    // and dead sockets surface as write errors.
+    if (liveTick % 8 === 0) {
+      for (const res of sseClients) {
+        try { res.write(": keepalive\n\n"); } catch { sseClients.delete(res); }
+      }
+    }
+  } catch { /* next tick retries */ }
+  finally { liveBusy = false; }
+}
+
+function startLiveLane() {
+  if (liveTimer) return;
+  liveTick = 0;
+  const sec = Math.max(1, Number(cfg.liveRefreshSec) || 3);
+  liveTimer = setInterval(liveTickFn, sec * 1000);
+  liveTickFn();
+}
+
+function stopLiveLaneIfIdle() {
+  if (!sseClients.size && liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    liveLast.clear();
+  }
+}
+
+function handleEvents(req, res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "access-control-allow-origin": "*",
+  });
+  res.write("retry: 3000\n\n");
+  sseClients.add(res);
+  // New subscriber gets the current picture immediately, not on next change.
+  for (const [event, data] of liveLast) {
+    try { res.write(`event: ${event}\ndata: ${data}\n\n`); } catch {}
+  }
+  startLiveLane();
+  req.on("close", () => { sseClients.delete(res); stopLiveLaneIfIdle(); });
 }
 
 // ── PROD column (pivi /statusz) ─────────────────────────────────────────────
@@ -1298,6 +1414,9 @@ const requestHandler = async (req, res) => {
     if (req.method === "GET" && req.url === "/api/state") {
       return send(res, 200, await gatherState());
     }
+    if (req.method === "GET" && req.url === "/api/events") {
+      return handleEvents(req, res);
+    }
     if (req.method === "POST" && req.url === "/api/refresh") {
       return send(res, 200, await actionRefresh());
     }
@@ -1463,6 +1582,9 @@ const servers = BIND_HOSTS.map((host) => {
 // Graceful shutdown so the extension can stop us cleanly.
 function shutdown() {
   for (const id of [...customTimers.keys()]) stopCustomPoller(id);
+  if (liveTimer) clearInterval(liveTimer);
+  for (const res of sseClients) { try { res.end(); } catch {} }
+  sseClients.clear();
   let pending = servers.length;
   for (const s of servers) s.close(() => { if (--pending === 0) process.exit(0); });
   setTimeout(() => process.exit(1), 2000).unref();

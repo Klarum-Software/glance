@@ -189,7 +189,7 @@ function renderRemote(r) {
   }
 
   const online = r.peers.filter(p => p.online).length;
-  meta.textContent = `· ${online}/${r.peers.length} online`;
+  meta.textContent = `· ${online}/${r.peers.length} online` + liveSuffix();
   for (const p of r.peers) grid.appendChild(renderPeerRow(p));
 }
 
@@ -276,7 +276,7 @@ function renderSessions(state) {
 
   // ── header meta: "5.7G / 27G · 2 sess"
   meta.textContent =
-    `· ${fmtBytes(mem.used_kb)} / ${fmtBytes(totalKb)} · ${sessions.length} sess`;
+    `· ${fmtBytes(mem.used_kb)} / ${fmtBytes(totalKb)} · ${sessions.length} sess` + liveSuffix();
 
   // ── vertical stacked bar ────────────────────────────────────────────────
   // Anchored bottom: sessions first (in size order), then "other", then
@@ -471,6 +471,7 @@ function renderSearchResults(payload) {
 }
 
 function render(state) {
+  LAST_STATE = state;
   renderClock(state.now);
   renderServices(state.services || {});
   updateNavBadges(state);
@@ -481,6 +482,46 @@ function render(state) {
   renderCalendar(state.calendar);
   LAST_LIVE_INBOX = state.inbox;
   if (!INBOX_SEARCH_ACTIVE) renderInbox(state.inbox);
+}
+
+// ── live events (SSE) ───────────────────────────────────────────────────────
+// /api/events pushes sessions / remote / tmux deltas every few seconds; the
+// 30s /api/state poll stays as the fallback and covers everything else
+// (calendar, inbox, prod). EventSource reconnects on its own after a backend
+// restart, so there is no retry plumbing here.
+
+let LAST_STATE = null;
+let LIVE = false;
+
+function liveSuffix() {
+  return LIVE ? " · live" : "";
+}
+
+function initLiveEvents() {
+  if (typeof EventSource === "undefined") return;
+  const es = new EventSource("/api/events");
+  es.addEventListener("open",  () => { LIVE = true; });
+  es.addEventListener("error", () => { LIVE = false; });
+  es.addEventListener("sessions", (ev) => {
+    if (!LAST_STATE) return;
+    const d = JSON.parse(ev.data);
+    LAST_STATE.sessions = d.sessions;
+    LAST_STATE.memory   = d.memory;
+    renderSessions(LAST_STATE);
+    updateNavBadges(LAST_STATE);
+  });
+  es.addEventListener("remote", (ev) => {
+    if (!LAST_STATE) return;
+    LAST_STATE.remote = JSON.parse(ev.data);
+    renderRemote(LAST_STATE.remote);
+    updateNavBadges(LAST_STATE);
+  });
+  es.addEventListener("tmux", (ev) => {
+    if (!LAST_STATE) return;
+    LAST_STATE.tmux = JSON.parse(ev.data);
+    renderTerminalTabs(LAST_STATE.tmux);
+    updateNavBadges(LAST_STATE);
+  });
 }
 
 // ── terminal (tmux poll) ───────────────────────────────────────────────────
@@ -1234,6 +1275,7 @@ $("prod-refresh")?.addEventListener("click", () => reload());
 initSidebar();
 initSettings();
 handleConnectReturn();
+initLiveEvents();
 
 // ── main loop ─────────────────────────────────────────────────────────────
 

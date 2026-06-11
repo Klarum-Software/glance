@@ -10,6 +10,7 @@
 │  • GNOME Shell extension  (Linux/GNOME — same /api/state)         │
 └──────────────────────────────────────────────────────────────────┘
                                   │ HTTP /api/state (poll, 30s)
+                                  │ + /api/events (SSE push, ~3s)
                                   │ + /api/tmux/* (terminal, ~1.2s)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────┐
@@ -49,6 +50,7 @@
 |--------|-----------------------------------|--------------------------------------|
 | GET    | `/api/health`                     | `{ ok, version, platform }`           |
 | GET    | `/api/state`                      | Aggregated snapshot                   |
+| GET    | `/api/events`                     | SSE: `sessions`/`remote`/`tmux` pushes |
 | POST   | `/api/refresh`                    | Invalidate caches, return fresh state |
 | POST   | `/api/open`                       | `{ url }` -> opens in default handler |
 | GET    | `/api/config/peers`               | list manual remote peers              |
@@ -77,7 +79,14 @@ glance URL to proxy `/api/tmux*` to; how non-host machines join s01's
 session), `inboxDir`, `calendarBin`,
 `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`, `gmailBlacklist`,
 `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`, `services[]`,
-`presencePort`, `peers[]`.
+`presencePort`, `peers[]`, `liveRefreshSec`.
+
+The browser dashboard subscribes to `/api/events` (server-sent events). A
+background fast lane rescans local claude sessions every `liveRefreshSec`
+seconds (default 3) and sweeps remote presence plus tmux windows every other
+tick, broadcasting a frame only when the payload changed. The lane runs only
+while at least one subscriber is connected; the 30s `/api/state` poll remains
+the fallback and covers calendar, inbox, and prod.
 
 Each is also overridable via `GLANCE_*` env vars (e.g. `GLANCE_HOST`,
 `GLANCE_TMUX_SESSION`).
