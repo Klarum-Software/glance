@@ -60,6 +60,21 @@ const DEFAULTS = {
   // manually-configured remote peers, added via the REMOTE column "+" button.
   // shown alongside tailscale-discovered peers. each item: { name, host, port? }
   peers: [],
+  // production /statusz endpoints surfaced in the PROD column. Each item:
+  // { name, url, headers? }. statusz is public + no-auth, so headers are
+  // optional; they exist for pointing a target at an auth-gated mirror.
+  // Gateway lives on the API subdomain (api.klarum.com per ansible inventory;
+  // app.klarum.com is the Vercel frontend). The pipeline exposes a JSON twin
+  // at /statusz.json on notices.klarum.com. gatherProd normalizes both the
+  // gateway's per-job shape and the pipeline's per-run shape into job cards.
+  prodTargets: [
+    { name: "gateway",  url: "https://api.klarum.com/statusz" },
+    { name: "pipeline", url: "https://notices.klarum.com/statusz.json?limit=5" },
+  ],
+  // PROD poll cache TTL (seconds). statusz is rate-limited to 10/min per IP,
+  // so we cache in-memory and refetch at most once per TTL no matter how many
+  // dashboard clients are polling /api/state.
+  prodRefreshSec: 30,
 };
 
 function load() {
@@ -82,6 +97,10 @@ function load() {
   if (process.env.GLANCE_TMUX_HOST)    env.tmuxHost    = process.env.GLANCE_TMUX_HOST;
   if (process.env.GLANCE_SERVICES)     env.services = process.env.GLANCE_SERVICES.split(",").map(s => s.trim()).filter(Boolean);
   if (process.env.GLANCE_PRESENCE_PORT) env.presencePort = Number(process.env.GLANCE_PRESENCE_PORT);
+  if (process.env.GLANCE_PROD_TARGETS) {
+    try { env.prodTargets = JSON.parse(process.env.GLANCE_PROD_TARGETS); } catch { /* keep file/default */ }
+  }
+  if (process.env.GLANCE_PROD_REFRESH_SEC) env.prodRefreshSec = Number(process.env.GLANCE_PROD_REFRESH_SEC);
 
   return { ...DEFAULTS, ...user, ...env };
 }

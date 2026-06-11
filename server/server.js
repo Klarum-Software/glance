@@ -747,12 +747,110 @@ function gatherSessions() {
   return sessions;
 }
 
+// ── PROD column (pivi /statusz) ─────────────────────────────────────────────
+// Polls the public, no-auth, rate-limited /statusz endpoints of the pivi prod
+// services and surfaces the per-job (job_id, status, last_run_at) projection.
+// statusz serves HTML by default, JSON only on request, so we ask for both via
+// Accept and ?format=json. Cached in-memory with an in-flight guard so we hit
+// each upstream at most once per prodRefreshSec regardless of client count
+// (the endpoints rate-limit at 10/min per IP).
+
+const prodCache    = new Map();  // url → { fetched_at, result }
+const prodInflight = new Map();  // url → Promise<result>
+
+// Two statusz dialects in prod: the gateway returns { generated_at, jobs:[...] }
+// (PR #996); the pipeline's /statusz.json returns a single run-state object
+// { status, last_run, finished_at, runs:[...] }. Fold both into job cards so
+// the PROD column renders them uniformly.
+function normalizeStatusz(parsed) {
+  if (Array.isArray(parsed.jobs)) {
+    return {
+      generated_at: parsed.generated_at || null,
+      jobs: parsed.jobs.map(j => ({ job_id: j.job_id, status: j.status, last_run_at: j.last_run_at })),
+    };
+  }
+  if (parsed.status || parsed.last_run) {
+    const lr = parsed.last_run || {};
+    const running = parsed.status === "running";
+    return {
+      generated_at: parsed.generated_at || parsed.finished_at || null,
+      jobs: [{
+        job_id: "pipeline",
+        status: running ? "running" : (lr.status || parsed.status || "unknown"),
+        last_run_at: lr.finished_at || parsed.finished_at || lr.started_at || parsed.started_at || null,
+      }],
+    };
+  }
+  return { generated_at: parsed.generated_at || null, jobs: [] };
+}
+
+function fetchStatuszOnce(target) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(target.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    if (!url.searchParams.has("format")) url.searchParams.set("format", "json");
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...target.headers },
+      timeout:  5000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if (r.statusCode < 200 || r.statusCode >= 300) {
+          return resolve({ ok: false, error: `http ${r.statusCode}`, status_code: r.statusCode });
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); }
+        catch (e) { return resolve({ ok: false, error: "not json: " + e.message }); }
+        resolve({ ok: true, ...normalizeStatusz(parsed) });
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+    req.end();
+  });
+}
+
+async function fetchStatuszCached(target) {
+  const cached = prodCache.get(target.url);
+  if (cached && (Date.now() - cached.fetched_at) < (cfg.prodRefreshSec * 1000)) return cached.result;
+
+  let inflight = prodInflight.get(target.url);
+  if (!inflight) {
+    inflight = fetchStatuszOnce(target).then(result => {
+      prodCache.set(target.url, { fetched_at: Date.now(), result });
+      prodInflight.delete(target.url);
+      return result;
+    });
+    prodInflight.set(target.url, inflight);
+  }
+  return inflight;
+}
+
+async function gatherProd() {
+  const targets = Array.isArray(cfg.prodTargets) ? cfg.prodTargets : [];
+  const results = await Promise.all(targets.map(async t => ({
+    name: t.name || t.url,
+    url:  t.url,
+    ...(await fetchStatuszCached(t)),
+  })));
+  return { targets: results };
+}
+
 async function gatherState() {
-  const [calendar, remote, inbox, tmux] = await Promise.all([
+  const [calendar, remote, inbox, tmux, prod] = await Promise.all([
     gatherCalendar(),
     gatherRemote(),
     gatherInbox(),
     tmuxListWindows(),
+    gatherProd(),
   ]);
   return {
     now: new Date().toISOString(),
@@ -763,6 +861,7 @@ async function gatherState() {
     sessions: gatherSessions(),
     remote,
     calendar, inbox, tmux,
+    prod,
     custom: snapshotCustom(),
   };
 }

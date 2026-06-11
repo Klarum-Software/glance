@@ -37,6 +37,7 @@
   --sessions: var(--brand);
   --terminal: var(--pos);
   --mail:     #c98bdb;
+  --prod:     #54c7c7;
 
   --radius: 4px;
   --row-h: 22px;
@@ -148,10 +149,12 @@ html, body {
 .nav-item[data-panel="remote"].active   { border-left-color: var(--remote); }
 .nav-item[data-panel="sessions"].active { border-left-color: var(--sessions); }
 .nav-item[data-panel="terminal"].active { border-left-color: var(--terminal); }
+.nav-item[data-panel="prod"].active      { border-left-color: var(--prod); }
 .nav-item[data-panel="mail"].active      { border-left-color: var(--mail); }
 .nav-item[data-panel="remote"].active   .nav-icon { color: var(--remote); }
 .nav-item[data-panel="sessions"].active .nav-icon { color: var(--sessions); }
 .nav-item[data-panel="terminal"].active .nav-icon { color: var(--terminal); }
+.nav-item[data-panel="prod"].active      .nav-icon { color: var(--prod); }
 .nav-item[data-panel="mail"].active      .nav-icon { color: var(--mail); }
 
 .sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; border-left: 0; }
@@ -272,6 +275,7 @@ html, body {
 .col-tag.remote   { color: var(--remote); }
 .col-tag.sessions { color: var(--sessions); }
 .col-tag.terminal { color: var(--terminal); }
+.col-tag.prod     { color: var(--prod); }
 .col-tag.mail     { color: var(--mail); }
 .col-meta {
   color: var(--ink-3);
@@ -384,6 +388,29 @@ html, body {
 }
 .tcard-badge.warn { color: var(--warn); background: rgba(232,162,61,0.13); border-color: rgba(232,162,61,0.30); }
 .tcard-badge.info { color: var(--info); background: rgba(106,163,255,0.13); border-color: rgba(106,163,255,0.30); }
+
+/* ── prod column ──────────────────────────────────────────────────────────── */
+.prod-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-2) transparent;
+}
+.prod-body::-webkit-scrollbar { width: 7px; }
+.prod-body::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 3px; }
+.prod-empty { color: var(--ink-3); font-size: 10px; font-style: italic; padding: 2px 4px 4px; }
+.col-meta.prod-down { color: var(--neg); }
+
+.tcard-prod.ok   { --accent: var(--pos); }
+.tcard-prod.bad  { --accent: var(--neg); }
+.tcard-prod.warn { --accent: var(--warn); }
+.tcard-prod.skip { --accent: var(--ink-4); opacity: 0.6; }
+.tcard-prod .tcard-value { text-transform: uppercase; }
 
 /* ── remote column ────────────────────────────────────────────────────── */
 
