@@ -77,7 +77,16 @@ glance URL to proxy `/api/tmux*` to; how non-host machines join s01's
 session), `inboxDir`, `calendarBin`,
 `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`, `gmailBlacklist`,
 `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`, `services[]`,
-`presencePort`, `peers[]`.
+`presencePort`, `peers[]`, `prodTargets[]`, `prodRefreshSec`,
+`prodHealth[]`, `prodHealthIntervalSec`, `deployTargets[]`,
+`deployRefreshSec`.
+
+The PROD panel draws from three sources: `prodTargets` (statusz job feeds,
+fetched lazily with a TTL cache), `prodHealth` (liveness checks polled in the
+background so up/down transitions are recorded even with no client attached;
+transitions persist to `~/.config/glance/prod-history.json`), and
+`deployTargets` (latest deploy per target via the local `gh` CLI, either an
+Actions workflow or the GitHub Deployments API).
 
 Each is also overridable via `GLANCE_*` env vars (e.g. `GLANCE_HOST`,
 `GLANCE_TMUX_SESSION`).
