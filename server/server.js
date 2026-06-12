@@ -1046,7 +1046,14 @@ function fetchFleetOnce(target) {
           last_job:       m.last_job || null,
           last_heartbeat: m.last_heartbeat || null,
         }));
-        resolve({ ok: true, machines, total: parsed.total ?? machines.length, stale_count: parsed.stale_count ?? 0 });
+        resolve({
+          ok: true, machines,
+          total: parsed.total ?? machines.length,
+          stale_count: parsed.stale_count ?? 0,
+          // request-rate + active-user gauges (pivi #1104), including the
+          // per-org breakdown the ADMIN panel shows as concurrent usage.
+          traffic: parsed.traffic || null,
+        });
       });
     });
     req.on("error",   e => resolve({ ok: false, error: e.message }));
@@ -1730,13 +1737,13 @@ async function actionInboxBulk(body) {
 }
 
 // ── pivi org admin proxy ─────────────────────────────────────────────────────
-// The ADMIN panel manages pivi enterprise orgs (feature flags per org) via
-// the gateway's /api/admin endpoints. Only three exact path shapes are
-// proxied, ids and feature names are safelisted, and the Authorization
-// header comes from config — the browser never holds the admin token.
+// The ADMIN panel is a read-only view of pivi tenant orgs (tier, seats,
+// members, balance, tier-derived features) via the gateway's /api/admin
+// endpoints. Only two exact GET path shapes are proxied, ids are safelisted,
+// and the Authorization header comes from config — the browser never holds
+// the admin token. Tier/seats/balance change through pivi billing, not here.
 
-const PIVI_UUID_RE    = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PIVI_FEATURE_RE = /^[a-z0-9_.-]{1,64}$/i;
+const PIVI_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function piviAdminRequest(method, upstreamPath, bodyObj) {
   return new Promise((resolve) => {
@@ -1784,29 +1791,16 @@ function piviAdminRequest(method, upstreamPath, bodyObj) {
 }
 
 async function handlePiviAdmin(req, res) {
-  if (req.method === "GET" && req.url === "/api/pivi-admin/firms") {
-    const r = await piviAdminRequest("GET", "/api/admin/firms");
+  if (req.method === "GET" && req.url === "/api/pivi-admin/orgs") {
+    const r = await piviAdminRequest("GET", "/api/admin/orgs");
     return send(res, r.ok ? 200 : (r.statusCode || 502), r);
   }
   {
-    const m = req.method === "GET" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features$/);
+    const m = req.method === "GET" && req.url.match(/^\/api\/pivi-admin\/orgs\/([^/?#]+)\/features$/);
     if (m) {
       const id = decodeURIComponent(m[1]);
-      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
-      const r = await piviAdminRequest("GET", `/api/admin/firms/${id}/features`);
-      return send(res, r.ok ? 200 : (r.statusCode || 502), r);
-    }
-  }
-  {
-    const m = req.method === "POST" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features\/([^/?#]+)\/toggle$/);
-    if (m) {
-      const id = decodeURIComponent(m[1]);
-      const feature = decodeURIComponent(m[2]);
-      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
-      if (!PIVI_FEATURE_RE.test(feature)) return send(res, 400, { ok: false, error: "invalid feature name" });
-      const body = await readBody(req);
-      const enabled = !!(body && body.enabled);
-      const r = await piviAdminRequest("POST", `/api/admin/firms/${id}/features/${feature}/toggle`, { enabled });
+      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid org id" });
+      const r = await piviAdminRequest("GET", `/api/admin/orgs/${id}/features`);
       return send(res, r.ok ? 200 : (r.statusCode || 502), r);
     }
   }

@@ -111,11 +111,12 @@ const DEFAULTS = {
   // pushed to /api/events subscribers (remote presence + tmux go every other
   // tick). Only runs while a subscriber is connected.
   liveRefreshSec: 3,
-  // Pivi org admin proxy: the ADMIN panel drives pivi's /api/admin endpoints
-  // (tenant orgs, per-org feature flags) through the glance backend using
-  // this base URL + Authorization header. The gateway checks the token's
-  // user against its admin_users table; without a token the panel renders
-  // locked. Point url at a dev gateway (http://localhost:8000) to manage dev.
+  // Pivi org admin proxy: the ADMIN panel reads pivi's /api/admin endpoints
+  // (tenant orgs with tier/seats/balance, tier-derived capabilities) through
+  // the glance backend using this base URL + Authorization header. The
+  // gateway requires the token's user to have role system_admin; without a
+  // token the panel renders locked. Point url at a dev gateway
+  // (http://localhost:8000) to view dev.
   //   "piviAdmin": { "url": "...", "headers": { "Authorization": "Bearer <token>" } }
   piviAdmin: { url: "https://api.klarum.com" },
 };
