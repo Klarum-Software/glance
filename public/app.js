@@ -7,7 +7,7 @@ const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); re
 
 const TERM_POLL_MS  = 1200;
 
-const PANELS       = ["remote", "sessions", "terminal", "prod", "mail", "settings"];
+const PANELS       = ["remote", "sessions", "terminal", "prod", "padmin", "mail", "settings"];
 const PANEL_KEY    = "glance.panel";
 const COLLAPSE_KEY = "glance.sidebar.collapsed";
 
@@ -688,6 +688,176 @@ async function pasteTerminal(ev) {
   if (text) { ev.preventDefault(); sendTerminal({ text }); }
 }
 
+// ── pivi org admin panel ─────────────────────────────────────────────────────
+// Enterprise org management against pivi's /api/admin via the backend proxy:
+// tenant org list, per-org feature flags with on/off switches. Renders locked
+// until piviAdmin.headers carries an admin bearer token.
+
+const PADMIN = { firms: [], features: new Map(), open: new Set() };
+
+function padminLocked(error) {
+  return el("div", { class: "remote-empty" },
+    el("div", { class: "remote-empty-title" }, "admin API locked"),
+    el("div", { class: "remote-empty-hint" },
+      el("span", {}, (error ? error + ". " : ""), "Add an admin bearer token to ",
+        el("code", {}, "piviAdmin.headers"), " in config.json."),
+    ));
+}
+
+function firmMetaBadges(f) {
+  const meta = f.meta || {};
+  const badges = [];
+  const plan = meta.plan_type || f.plan_type;
+  if (plan) badges.push(el("span", { class: "tcard-badge" + (plan === "enterprise" ? " info" : " mute") }, plan));
+  const bal = meta.current_balance ?? f.current_balance;
+  if (bal != null) badges.push(el("span", { class: "tcard-badge" + (Number(bal) <= 0 ? " warn" : "") }, "balance " + bal));
+  const seats = f.seats_used ?? f.member_count ?? meta.member_count;
+  if (seats != null) badges.push(el("span", { class: "tcard-badge" }, seats + " seats"));
+  if (meta.admin_email) badges.push(el("span", { class: "tcard-badge mute mono" }, meta.admin_email));
+  return badges;
+}
+
+function renderAdminFirmCard(f) {
+  const id = f.id || f.firm_id;
+  const isOpen = PADMIN.open.has(id);
+  const card = el("div", { class: "tcard tcard-padmin" + (isOpen ? " open" : "") },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", {
+        class: "tcard-head padmin-firm-head",
+        on: { click: () => toggleAdminFirm(id) },
+      },
+        el("span", { class: "tcard-title" }, f.display_name || f.legal_name || f.slug || id),
+        el("span", { class: "tcard-value mute" }, isOpen ? "hide flags" : "feature flags"),
+      ),
+      el("div", { class: "tcard-badges" }, ...firmMetaBadges(f)),
+      isOpen ? renderAdminFeatures(id) : null,
+    ),
+  );
+  return card;
+}
+
+function renderAdminFeatures(firmId) {
+  const wrap = el("div", { class: "padmin-features", "data-firm": firmId });
+  const cached = PADMIN.features.get(firmId);
+  if (!cached) {
+    wrap.appendChild(el("div", { class: "prod-empty" }, "loading flags…"));
+    loadAdminFeatures(firmId);
+    return wrap;
+  }
+  if (cached.error) {
+    wrap.appendChild(el("div", { class: "prod-empty" }, cached.error));
+    return wrap;
+  }
+  if (!cached.flags.length) {
+    wrap.appendChild(el("div", { class: "prod-empty" }, "no flags set (everything defaults on)"));
+  }
+  for (const flag of cached.flags) {
+    wrap.appendChild(el("div", { class: "padmin-flag" },
+      el("button", {
+        class: "padmin-switch" + (flag.is_enabled ? " on" : ""),
+        role: "switch",
+        "aria-checked": String(!!flag.is_enabled),
+        title: (flag.is_enabled ? "disable " : "enable ") + flag.feature_name,
+        on: { click: () => toggleAdminFlag(firmId, flag.feature_name, !flag.is_enabled) },
+      }, el("i", {})),
+      el("span", { class: "padmin-flag-name" }, flag.feature_name),
+      el("span", { class: "padmin-flag-state" + (flag.is_enabled ? " on" : "") }, flag.is_enabled ? "on" : "off"),
+    ));
+  }
+  return wrap;
+}
+
+function toggleAdminFirm(id) {
+  if (PADMIN.open.has(id)) PADMIN.open.delete(id);
+  else PADMIN.open.add(id);
+  renderAdminPanel();
+}
+
+function renderAdminPanel() {
+  const body = $("padmin-body");
+  if (!body) return;
+  body.replaceChildren();
+  if (PADMIN.lockedError !== undefined) {
+    $("padmin-meta").textContent = "· locked";
+    body.appendChild(padminLocked(PADMIN.lockedError));
+    return;
+  }
+  if (PADMIN.fetchError) {
+    $("padmin-meta").textContent = "· error";
+    body.appendChild(el("div", { class: "remote-empty" },
+      el("div", { class: "remote-empty-title" }, "could not load orgs"),
+      el("div", { class: "remote-empty-hint" }, PADMIN.fetchError)));
+    return;
+  }
+  $("padmin-meta").textContent = `· ${PADMIN.firms.length} tenant org${PADMIN.firms.length === 1 ? "" : "s"}`;
+  if (!PADMIN.firms.length) {
+    body.appendChild(el("div", { class: "prod-empty" }, "no tenant orgs"));
+    return;
+  }
+  for (const f of PADMIN.firms) body.appendChild(renderAdminFirmCard(f));
+}
+
+async function loadAdminFirms() {
+  try {
+    const r = await fetch("/api/pivi-admin/firms", { cache: "no-store" });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) {
+      PADMIN.lockedError = j.auth_required ? (j.error || "auth required") : undefined;
+      PADMIN.fetchError  = j.auth_required ? null : (j.error || `http ${r.status}`);
+      renderAdminPanel();
+      return;
+    }
+    PADMIN.lockedError = undefined;
+    PADMIN.fetchError = null;
+    const d = j.data;
+    PADMIN.firms = Array.isArray(d) ? d : (d && (d.firms || d.organizations)) || [];
+    renderAdminPanel();
+  } catch (e) {
+    PADMIN.fetchError = e.message;
+    renderAdminPanel();
+  }
+}
+
+async function loadAdminFeatures(firmId) {
+  try {
+    const r = await fetch(`/api/pivi-admin/firms/${encodeURIComponent(firmId)}/features`, { cache: "no-store" });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) {
+      PADMIN.features.set(firmId, { flags: [], error: j.error || `http ${r.status}` });
+    } else {
+      const d = j.data;
+      const flags = Array.isArray(d) ? d : (d && (d.features || d.flags)) || [];
+      PADMIN.features.set(firmId, { flags });
+    }
+  } catch (e) {
+    PADMIN.features.set(firmId, { flags: [], error: e.message });
+  }
+  renderAdminPanel();
+}
+
+async function toggleAdminFlag(firmId, feature, enabled) {
+  try {
+    const r = await fetch(`/api/pivi-admin/firms/${encodeURIComponent(firmId)}/features/${encodeURIComponent(feature)}/toggle`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) return toast("toggle failed: " + (j.error || r.status), 4000);
+    toast(`${feature} ${enabled ? "enabled" : "disabled"}`);
+    PADMIN.features.delete(firmId);
+    loadAdminFeatures(firmId);
+  } catch (e) {
+    toast("toggle failed: " + e.message, 4000);
+  }
+}
+
+$("padmin-refresh")?.addEventListener("click", () => {
+  PADMIN.features.clear();
+  loadAdminFirms();
+});
+
 // ── sidebar nav (single active panel) ──────────────────────────────────────
 
 function activePanel() {
@@ -704,6 +874,9 @@ function setActivePanel(name) {
   if (name === "terminal") { captureTerminal(); $("term-screen")?.focus(); }
   // Settings sections are fetched on demand so they're always fresh when shown.
   if (name === "settings") renderSettingsSection(activeSettingsSection());
+  // Org admin data is fetched on demand: it lives behind an admin token and
+  // has no business riding the 30s state poll.
+  if (name === "padmin") loadAdminFirms();
 }
 
 function setSidebarCollapsed(collapsed) {

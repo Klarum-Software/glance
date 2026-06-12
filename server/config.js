@@ -75,6 +75,13 @@ const DEFAULTS = {
   // so we cache in-memory and refetch at most once per TTL no matter how many
   // dashboard clients are polling /api/state.
   prodRefreshSec: 30,
+  // Pivi org admin proxy: the ADMIN panel drives pivi's /api/admin endpoints
+  // (tenant orgs, per-org feature flags) through the glance backend using
+  // this base URL + Authorization header. The gateway checks the token's
+  // user against its admin_users table; without a token the panel renders
+  // locked. Point url at a dev gateway (http://localhost:8000) to manage dev.
+  //   "piviAdmin": { "url": "...", "headers": { "Authorization": "Bearer <token>" } }
+  piviAdmin: { url: "https://api.klarum.com" },
 };
 
 function load() {
@@ -101,6 +108,9 @@ function load() {
     try { env.prodTargets = JSON.parse(process.env.GLANCE_PROD_TARGETS); } catch { /* keep file/default */ }
   }
   if (process.env.GLANCE_PROD_REFRESH_SEC) env.prodRefreshSec = Number(process.env.GLANCE_PROD_REFRESH_SEC);
+  if (process.env.GLANCE_PIVI_ADMIN) {
+    try { env.piviAdmin = JSON.parse(process.env.GLANCE_PIVI_ADMIN); } catch { /* keep file/default */ }
+  }
 
   return { ...DEFAULTS, ...user, ...env };
 }

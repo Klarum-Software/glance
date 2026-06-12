@@ -38,6 +38,11 @@
           <span class="nav-label">PROD</span>
           <span class="nav-badge" id="nav-badge-prod"></span>
         </button>
+        <button class="nav-item" data-panel="padmin" title="ADMIN">
+          <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+          <span class="nav-label">ADMIN</span>
+          <span class="nav-badge" id="nav-badge-padmin"></span>
+        </button>
         <button class="nav-item" data-panel="mail" title="MAIL">
           <span class="nav-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span>
           <span class="nav-label">MAIL</span>
@@ -112,6 +117,15 @@
           <button class="col-action" id="prod-refresh" title="refresh">⟲</button>
         </h2>
         <div class="prod-body" id="prod-body"></div>
+      </section>
+
+      <section class="col col-padmin panel" data-panel="padmin" hidden>
+        <h2>
+          <span class="col-tag padmin">ADMIN</span>
+          <span class="col-meta" id="padmin-meta"></span>
+          <button class="col-action" id="padmin-refresh" title="refresh">⟲</button>
+        </h2>
+        <div class="padmin-body" id="padmin-body"></div>
       </section>
 
       <section class="col col-mail panel" data-panel="mail" hidden>
