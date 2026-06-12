@@ -1729,6 +1729,90 @@ async function actionInboxBulk(body) {
   return { ok: true, count: ids.length };
 }
 
+// ── pivi org admin proxy ─────────────────────────────────────────────────────
+// The ADMIN panel manages pivi enterprise orgs (feature flags per org) via
+// the gateway's /api/admin endpoints. Only three exact path shapes are
+// proxied, ids and feature names are safelisted, and the Authorization
+// header comes from config — the browser never holds the admin token.
+
+const PIVI_UUID_RE    = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PIVI_FEATURE_RE = /^[a-z0-9_.-]{1,64}$/i;
+
+function piviAdminRequest(method, upstreamPath, bodyObj) {
+  return new Promise((resolve) => {
+    const base = cfg.piviAdmin;
+    if (!base || !base.url) return resolve({ ok: false, error: "piviAdmin not configured", statusCode: 400 });
+    let url;
+    try { url = new URL(upstreamPath, base.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message, statusCode: 500 }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const payload = bodyObj != null ? JSON.stringify(bodyObj) : null;
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method,
+      headers: {
+        accept: "application/json",
+        ...(payload != null ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
+        ...base.headers,
+      },
+      timeout: 8000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let data = null;
+        if (text) { try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 400) }; } }
+        if (r.statusCode === 401 || r.statusCode === 403) {
+          return resolve({ ok: false, auth_required: true, statusCode: r.statusCode,
+            error: (data && (data.detail || data.error)) || `auth required (http ${r.statusCode})` });
+        }
+        if (r.statusCode < 200 || r.statusCode >= 300) {
+          return resolve({ ok: false, statusCode: r.statusCode,
+            error: (data && (data.detail || data.error)) || `http ${r.statusCode}` });
+        }
+        resolve({ ok: true, data });
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message, statusCode: 502 }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout", statusCode: 504 }); });
+    if (payload != null) req.write(payload);
+    req.end();
+  });
+}
+
+async function handlePiviAdmin(req, res) {
+  if (req.method === "GET" && req.url === "/api/pivi-admin/firms") {
+    const r = await piviAdminRequest("GET", "/api/admin/firms");
+    return send(res, r.ok ? 200 : (r.statusCode || 502), r);
+  }
+  {
+    const m = req.method === "GET" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features$/);
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
+      const r = await piviAdminRequest("GET", `/api/admin/firms/${id}/features`);
+      return send(res, r.ok ? 200 : (r.statusCode || 502), r);
+    }
+  }
+  {
+    const m = req.method === "POST" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features\/([^/?#]+)\/toggle$/);
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      const feature = decodeURIComponent(m[2]);
+      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
+      if (!PIVI_FEATURE_RE.test(feature)) return send(res, 400, { ok: false, error: "invalid feature name" });
+      const body = await readBody(req);
+      const enabled = !!(body && body.enabled);
+      const r = await piviAdminRequest("POST", `/api/admin/firms/${id}/features/${feature}/toggle`, { enabled });
+      return send(res, r.ok ? 200 : (r.statusCode || 502), r);
+    }
+  }
+  return false;
+}
+
 // ── google oauth (browser connect flow) ─────────────────────────────────────
 //
 // The CLI helper (bin/google-auth.js) does a loopback grab; here the dashboard
@@ -1972,6 +2056,11 @@ const requestHandler = async (req, res) => {
     }
     if (req.method === "POST" && req.url === "/api/google/remove") {
       return send(res, 200, await googleRemove());
+    }
+    if (req.url.startsWith("/api/pivi-admin/")) {
+      const handled = await handlePiviAdmin(req, res);
+      if (handled !== false) return;
+      return send(res, 404, { ok: false, error: "unknown pivi-admin route" });
     }
     if (req.method === "GET" && req.url === "/api/config/custom-widgets") {
       return send(res, 200, { widgets: Array.isArray(cfg.customWidgets) ? cfg.customWidgets : [] });
