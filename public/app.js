@@ -629,8 +629,109 @@ let INBOX_SETTINGS = { snippets: {}, has_summarizer: false };
 let INBOX_SEARCH_ACTIVE = false;
 let LAST_LIVE_INBOX = null;
 
+// ── inbox multiselect + bulk actions ────────────────────────────────────────
+// Selection survives re-renders (the 30s reload repaints rows); ids that left
+// the list are dropped so the count never refers to invisible mail.
+
+const INBOX_SEL = new Set();
+let INBOX_VISIBLE_IDS = [];
+let LABELS_LOADED = false;
+
+function toggleInboxSelect(id, on) {
+  if (on) INBOX_SEL.add(id); else INBOX_SEL.delete(id);
+  document.querySelector(`.inbox-row .inbox-check[data-id="${id}"]`)
+    ?.closest(".inbox-row")?.classList.toggle("selected", on);
+  updateBulkBar();
+}
+
+function pruneInboxSelection(items) {
+  INBOX_VISIBLE_IDS = items.map(m => m.id);
+  const visible = new Set(INBOX_VISIBLE_IDS);
+  for (const id of [...INBOX_SEL]) if (!visible.has(id)) INBOX_SEL.delete(id);
+}
+
+function clearInboxSelection() {
+  INBOX_SEL.clear();
+  for (const c of document.querySelectorAll(".inbox-row .inbox-check")) c.checked = false;
+  for (const r of document.querySelectorAll(".inbox-row.selected")) r.classList.remove("selected");
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = $("inbox-bulkbar");
+  if (!bar) return;
+  const n = INBOX_SEL.size;
+  bar.hidden = n === 0;
+  $("inbox-bulk-count").textContent = `${n} selected`;
+  const all = $("inbox-select-all");
+  if (all) {
+    all.checked = n > 0 && n === INBOX_VISIBLE_IDS.length;
+    all.indeterminate = n > 0 && n < INBOX_VISIBLE_IDS.length;
+  }
+  if (n > 0 && !LABELS_LOADED) loadInboxLabels();
+}
+
+async function loadInboxLabels() {
+  LABELS_LOADED = true;
+  try {
+    const r = await fetch("/api/inbox/labels", { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok || !Array.isArray(j.labels)) return;
+    const sel = $("inbox-bulk-move");
+    sel.replaceChildren(el("option", { value: "" }, "move to..."));
+    for (const l of j.labels) sel.appendChild(el("option", { value: l.id }, l.name));
+  } catch { LABELS_LOADED = false; }
+}
+
+async function runInboxBulk(action, labelId) {
+  const ids = [...INBOX_SEL];
+  if (!ids.length) return;
+  if (action === "trash" && !confirm(`Delete ${ids.length} email${ids.length === 1 ? "" : "s"}? They go to Gmail trash.`)) return;
+  try {
+    const body = { ids, action };
+    if (labelId) body.label_id = labelId;
+    const r = await fetch("/api/inbox/bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) return toast("bulk " + action + " failed: " + (j.error || r.status), 4000);
+    toast(`${action === "move" ? "moved" : action === "trash" ? "deleted" : action}: ${j.count} email${j.count === 1 ? "" : "s"}`);
+    clearInboxSelection();
+    reload();
+  } catch (e) {
+    toast("bulk failed: " + e.message, 4000);
+  }
+}
+
+$("inbox-bulkbar")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-bulk]");
+  if (!btn) return;
+  const act = btn.dataset.bulk;
+  if (act === "clear") return clearInboxSelection();
+  runInboxBulk(act);
+});
+
+$("inbox-bulk-move")?.addEventListener("change", (ev) => {
+  const labelId = ev.currentTarget.value;
+  ev.currentTarget.value = "";
+  if (labelId) runInboxBulk("move", labelId);
+});
+
+$("inbox-select-all")?.addEventListener("change", (ev) => {
+  const on = ev.currentTarget.checked;
+  for (const id of INBOX_VISIBLE_IDS) { if (on) INBOX_SEL.add(id); else INBOX_SEL.delete(id); }
+  for (const c of document.querySelectorAll(".inbox-row .inbox-check")) {
+    c.checked = on;
+    c.closest(".inbox-row")?.classList.toggle("selected", on);
+  }
+  updateBulkBar();
+});
+
 function renderInboxItem(m) {
   const tags = [];
+  if (m.is_alert) tags.push(el("span", { class: "inbox-tag alert" }, "invoice"));
   if (m.is_team)  tags.push(el("span", { class: "inbox-tag team" }, "team"));
   if (m.meeting)  tags.push(el("span", { class: "inbox-tag meeting", title: m.meeting.summary || "" },
     `· meeting ${fmtMeetingStart(m.meeting.start)}`));
@@ -642,10 +743,19 @@ function renderInboxItem(m) {
     el("button", { class: "btn btn-xs", "data-act": "archive",   "data-id": m.id }, "archive"),
   ];
 
+  const check = el("input", {
+    type: "checkbox",
+    class: "inbox-check",
+    "data-id": m.id,
+    on: { change: (ev) => toggleInboxSelect(m.id, ev.currentTarget.checked) },
+  });
+  if (INBOX_SEL.has(m.id)) check.checked = true;
+
   return el("li", {
-    class: "inbox-row" + (m.is_team ? " team" : ""),
+    class: "inbox-row" + (m.is_team ? " team" : "") + (m.is_alert ? " alert" : "") + (INBOX_SEL.has(m.id) ? " selected" : ""),
     title: m.from || "",
   },
+    check,
     el("span", { class: "inbox-from" }, shortFrom(m.from)),
     el("span", { class: "inbox-subject" },
       m.subject || "(no subject)",
@@ -671,12 +781,16 @@ function renderInbox(inbox) {
   if (!inbox.items || !inbox.items.length) {
     list.appendChild(el("li", { class: "empty" }, "inbox zero"));
     $("inbox-meta").textContent = inbox.important_only ? "· 0 important unread" : "· 0 unread";
+    pruneInboxSelection([]);
+    updateBulkBar();
     return;
   }
   $("inbox-meta").textContent = inbox.important_only
     ? `· ${inbox.unread_count} important unread`
     : `· ${inbox.unread_count} unread`;
+  pruneInboxSelection(inbox.items);
   for (const m of inbox.items) list.appendChild(renderInboxItem(m));
+  updateBulkBar();
 }
 
 function renderSearchResults(payload) {
@@ -685,9 +799,13 @@ function renderSearchResults(payload) {
   $("inbox-meta").textContent = `· search: ${payload.count} hit${payload.count === 1 ? "" : "s"}`;
   if (!payload.items.length) {
     list.appendChild(el("li", { class: "empty" }, "no matches"));
+    pruneInboxSelection([]);
+    updateBulkBar();
     return;
   }
+  pruneInboxSelection(payload.items);
   for (const m of payload.items) list.appendChild(renderInboxItem(m));
+  updateBulkBar();
 }
 
 function render(state) {

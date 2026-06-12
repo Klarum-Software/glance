@@ -856,7 +856,7 @@ a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent)
 
 .inbox-row {
   display: grid;
-  grid-template-columns: minmax(110px, 150px) 1fr auto;
+  grid-template-columns: 14px minmax(110px, 150px) 1fr auto;
   gap: 8px;
   align-items: center;
   padding: 3px 6px;
@@ -868,6 +868,55 @@ a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent)
 .inbox-row.team { border-left: 2px solid var(--mail); padding-left: 4px; }
 .inbox-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s; }
 .inbox-row:hover .inbox-actions { opacity: 1; }
+.inbox-row.selected { background: var(--paper-2); }
+
+/* Money mail: unmissable. Red edge, red-tinted row, red subject. */
+.inbox-row.alert {
+  border-left: 2px solid var(--neg);
+  padding-left: 4px;
+  background: rgba(239,121,114,0.08);
+}
+.inbox-row.alert .inbox-subject { color: var(--neg); font-weight: 600; }
+.inbox-tag.alert { background: rgba(239,121,114,0.18); color: var(--neg); font-weight: 700; }
+
+.inbox-check {
+  appearance: auto;
+  accent-color: var(--mail);
+  width: 12px; height: 12px;
+  margin: 0;
+  cursor: pointer;
+}
+.mail-subhead .inbox-check { margin-right: 2px; }
+
+.inbox-bulkbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-bottom: 2px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius);
+}
+.inbox-bulk-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  margin-right: 4px;
+}
+.inbox-bulk-move {
+  height: 18px;
+  font-size: 10px;
+  font-family: var(--font-sans);
+  background: var(--surface);
+  color: var(--ink-2);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius);
+  padding: 0 4px;
+  cursor: pointer;
+  max-width: 140px;
+}
+.inbox-bulk-move:hover { background: var(--paper-3); color: var(--ink); }
 .inbox-tag {
   font-size: 9px;
   text-transform: uppercase;

@@ -623,16 +623,30 @@ async function ensureCalendarContext() {
   await fetchCalendarContext();
 }
 
+// Whole-word matcher for the money-mail patterns: lookarounds on \p{L} so
+// "bill" doesn't light up "billing" while "Faktura #1042" still matches.
+function buildAlertRegex() {
+  const pats = (Array.isArray(cfg.gmailAlertPatterns) ? cfg.gmailAlertPatterns : [])
+    .map(p => String(p).trim()).filter(Boolean)
+    .map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!pats.length) return null;
+  try { return new RegExp(`(?<!\\p{L})(?:${pats.join("|")})(?!\\p{L})`, "iu"); }
+  catch { return null; }
+}
+
 function decorateInboxItems(items) {
   const teamSet = new Set((cfg.teamEmails || []).map(e => String(e).toLowerCase()));
+  const alertRe = buildAlertRegex();
   for (const m of items) {
     const email = extractEmail(m.from);
     m.from_email = email;
     m.is_team = !!(email && teamSet.has(email));
+    m.is_alert = !!(alertRe && alertRe.test(m.subject || ""));
     const ctx = email ? CAL_CONTEXT.map.get(email) : null;
     m.meeting = ctx || null;
   }
   items.sort((a, b) => {
+    if (a.is_alert !== b.is_alert) return a.is_alert ? -1 : 1;
     if (a.is_team !== b.is_team) return a.is_team ? -1 : 1;
     return (b.ts || "").localeCompare(a.ts || "");
   });
@@ -1666,6 +1680,55 @@ async function actionInboxSend(body) {
   catch { return { ok: true }; }
 }
 
+// Labels change rarely; cache so opening the move-to dropdown doesn't spawn
+// a gmail.js process every time.
+const labelsCache = { fetched_at: 0, labels: null };
+
+async function actionInboxLabels() {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (labelsCache.labels && (Date.now() - labelsCache.fetched_at) < 5 * 60_000) {
+    return { ok: true, labels: labelsCache.labels };
+  }
+  const r = await runGmail(["labels"]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "labels failed", statusCode: 500 };
+  const labels = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const idx = line.indexOf("\t");
+    if (idx < 1) continue;
+    labels.push({ id: line.slice(0, idx), name: line.slice(idx + 1) });
+  }
+  labels.sort((a, b) => a.name.localeCompare(b.name));
+  labelsCache.labels = labels;
+  labelsCache.fetched_at = Date.now();
+  return { ok: true, labels };
+}
+
+const GMAIL_LABEL_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const BULK_ACTIONS   = new Set(["read", "archive", "trash", "move"]);
+
+async function actionInboxBulk(body) {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (!body || !Array.isArray(body.ids)) return { ok: false, error: "expected { ids: [...] }", statusCode: 400 };
+  const ids = body.ids.map(String);
+  if (!ids.length || ids.length > 100) return { ok: false, error: "1..100 ids required", statusCode: 400 };
+  for (const id of ids) {
+    if (!GMAIL_ID_RE.test(id)) return { ok: false, error: `invalid id: ${id}`, statusCode: 400 };
+  }
+  const action = String(body.action || "");
+  if (!BULK_ACTIONS.has(action)) return { ok: false, error: "action must be read|archive|trash|move", statusCode: 400 };
+  let actionArg = action;
+  if (action === "move") {
+    const label = String(body.label_id || "");
+    if (!GMAIL_LABEL_RE.test(label)) return { ok: false, error: "label_id required for move", statusCode: 400 };
+    actionArg = `move:${label}`;
+  }
+  const r = await runGmail(["batch", actionArg, ids.join(",")]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "bulk failed", statusCode: 500 };
+  try { fs.unlinkSync(GMAIL_CACHE); } catch {}
+  return { ok: true, count: ids.length };
+}
+
 // ── google oauth (browser connect flow) ─────────────────────────────────────
 //
 // The CLI helper (bin/google-auth.js) does a loopback grab; here the dashboard
@@ -1848,6 +1911,15 @@ const requestHandler = async (req, res) => {
         team_emails: Array.isArray(cfg.teamEmails) ? cfg.teamEmails : [],
         has_summarizer: Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length > 0,
       });
+    }
+    if (req.method === "GET" && req.url === "/api/inbox/labels") {
+      const r = await actionInboxLabels();
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/inbox/bulk") {
+      const body = await readBody(req);
+      const r = await actionInboxBulk(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
     }
     if (req.method === "GET" && req.url.startsWith("/api/inbox/search")) {
       const u = new URL(req.url, "http://127.0.0.1");

@@ -45,6 +45,12 @@ const DEFAULTS = {
   // canned replies surfaced in the compose modal. Key is the dropdown label,
   // value is the body that replaces the textarea contents when selected.
   gmailSnippets: {},
+  // subjects matching any of these (whole-word, case-insensitive) get flagged
+  // red in the INBOX column: money mail must not drown in the noise.
+  gmailAlertPatterns: [
+    "invoice", "faktura", "bill", "räkning",
+    "payment due", "past due", "payment reminder", "betalningspåminnelse",
+  ],
   // emails whose senders should be highlighted + sorted to the top of the
   // INBOX column (e.g. teammates, manager, on-call rotation).
   teamEmails: [],
