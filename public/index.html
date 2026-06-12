@@ -121,8 +121,10 @@
           <button class="col-action" id="inbox-compose" title="compose new email">+</button>
         </h2>
         <form class="inbox-search" id="inbox-search-form" autocomplete="off">
-          <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'>
+          <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'
+                 role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="inbox-search-ac">
           <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
+          <div class="search-ac" id="inbox-search-ac" role="listbox" hidden></div>
         </form>
         <div class="mail-body">
           <div class="mail-section">
