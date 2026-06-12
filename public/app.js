@@ -1558,12 +1558,175 @@ async function runInboxSearch(q) {
 
 $("inbox-search-form")?.addEventListener("submit", (ev) => {
   ev.preventDefault();
+  searchAcClose();
   runInboxSearch($("inbox-search-input").value.trim());
 });
 $("inbox-search-clear")?.addEventListener("click", () => {
   $("inbox-search-input").value = "";
   runInboxSearch("");
 });
+
+// ── search autocomplete ─────────────────────────────────────────────────────
+// Programmatic, not agentic: a fixed registry of Gmail query operators with
+// per-operator value vocabularies. Completion is keyed off the token under
+// the caret; everything happens client-side except team emails (from
+// /api/inbox/settings, already loaded) and label names (lazy fetch, optional
+// endpoint, silently absent when the backend lacks it).
+
+let SEARCH_AC_LABELS = null;
+async function searchAcLabels() {
+  if (SEARCH_AC_LABELS) return SEARCH_AC_LABELS;
+  try {
+    const r = await fetch("/api/inbox/labels", { cache: "no-store" });
+    const j = await r.json();
+    // Gmail query syntax wants label names lowercased, spaces as hyphens.
+    SEARCH_AC_LABELS = (j.ok && Array.isArray(j.labels))
+      ? j.labels.map(l => l.name.toLowerCase().replace(/\s+/g, "-"))
+      : [];
+  } catch { SEARCH_AC_LABELS = []; }
+  return SEARCH_AC_LABELS;
+}
+
+function searchAcPeople() {
+  const team = Array.isArray(INBOX_SETTINGS.team_emails) ? INBOX_SETTINGS.team_emails : [];
+  return ["me", ...team];
+}
+
+const SEARCH_OPS = [
+  { op: "from:",        desc: "sender",            values: searchAcPeople },
+  { op: "to:",          desc: "recipient",         values: searchAcPeople },
+  { op: "cc:",          desc: "cc recipient",      values: searchAcPeople },
+  { op: "bcc:",         desc: "bcc recipient",     values: searchAcPeople },
+  { op: "subject:",     desc: "words in subject" },
+  { op: "label:",       desc: "has label",         values: () => SEARCH_AC_LABELS || (searchAcLabels(), []) },
+  { op: "is:",          desc: "message state",     values: () => ["unread", "read", "starred", "unstarred", "important", "snoozed", "muted"] },
+  { op: "in:",          desc: "location",          values: () => ["inbox", "sent", "drafts", "trash", "spam", "archive", "anywhere"] },
+  { op: "has:",         desc: "content type",      values: () => ["attachment", "drive", "document", "spreadsheet", "presentation", "youtube", "userlabels", "nouserlabels"] },
+  { op: "category:",    desc: "inbox tab",         values: () => ["primary", "social", "promotions", "updates", "forums"] },
+  { op: "filename:",    desc: "attachment name" },
+  { op: "newer_than:",  desc: "received within",   values: () => ["1d", "3d", "7d", "14d", "1m", "3m", "6m", "1y"] },
+  { op: "older_than:",  desc: "received before",   values: () => ["1d", "3d", "7d", "14d", "1m", "3m", "6m", "1y"] },
+  { op: "after:",       desc: "date YYYY/MM/DD" },
+  { op: "before:",      desc: "date YYYY/MM/DD" },
+  { op: "larger:",      desc: "size, e.g. 5M",     values: () => ["1M", "5M", "10M", "25M"] },
+  { op: "smaller:",     desc: "size, e.g. 5M",     values: () => ["1M", "5M", "10M", "25M"] },
+  { op: "deliveredto:", desc: "delivered-to addr", values: searchAcPeople },
+  { op: "list:",        desc: "mailing list" },
+];
+
+const SEARCH_AC = { items: [], active: -1, token: null };
+
+function searchTokenAt(value, caret) {
+  let start = caret;
+  while (start > 0 && !/\s/.test(value[start - 1])) start--;
+  let end = caret;
+  while (end < value.length && !/\s/.test(value[end])) end++;
+  return { start, end, typed: value.slice(start, caret) };
+}
+
+function searchAcBuild(typed) {
+  const t = typed.toLowerCase();
+  const colon = t.indexOf(":");
+  if (colon === -1) {
+    return SEARCH_OPS
+      .filter(o => o.op.startsWith(t))
+      .map(o => ({ insert: o.op, label: o.op, desc: o.desc, caretInside: true }));
+  }
+  const op = t.slice(0, colon + 1);
+  const val = t.slice(colon + 1);
+  const def = SEARCH_OPS.find(o => o.op === op);
+  if (!def || !def.values) return [];
+  if (op === "label:" && !SEARCH_AC_LABELS) searchAcLabels().then(() => searchAcUpdate());
+  return def.values()
+    .filter(v => v.toLowerCase().startsWith(val) && v.toLowerCase() !== val)
+    .map(v => ({ insert: op + v + " ", label: v, desc: def.desc }));
+}
+
+function searchAcRender() {
+  const box = $("inbox-search-ac");
+  const input = $("inbox-search-input");
+  box.replaceChildren();
+  const items = SEARCH_AC.items;
+  if (!items.length) {
+    box.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    return;
+  }
+  items.forEach((it, i) => {
+    box.appendChild(el("div", {
+      class: "search-ac-item" + (i === SEARCH_AC.active ? " active" : ""),
+      role: "option",
+      on: {
+        // mousedown, not click: click fires after the input's blur closed the
+        // box and the row was already gone.
+        mousedown: (ev) => { ev.preventDefault(); searchAcAccept(i); },
+      },
+    },
+      el("span", { class: "search-ac-op" }, it.label),
+      el("span", { class: "search-ac-desc" }, it.desc || ""),
+    ));
+  });
+  box.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+
+function searchAcUpdate() {
+  const input = $("inbox-search-input");
+  if (document.activeElement !== input) return;
+  const tok = searchTokenAt(input.value, input.selectionStart ?? input.value.length);
+  SEARCH_AC.token = tok;
+  SEARCH_AC.items = searchAcBuild(tok.typed).slice(0, 8);
+  SEARCH_AC.active = SEARCH_AC.items.length ? 0 : -1;
+  searchAcRender();
+}
+
+function searchAcClose() {
+  SEARCH_AC.items = [];
+  SEARCH_AC.active = -1;
+  searchAcRender();
+}
+
+function searchAcAccept(index) {
+  const input = $("inbox-search-input");
+  const it = SEARCH_AC.items[index];
+  const tok = SEARCH_AC.token;
+  if (!it || !tok) return;
+  const before = input.value.slice(0, tok.start);
+  const after  = input.value.slice(tok.end);
+  input.value = before + it.insert + after;
+  const caret = tok.start + it.insert.length;
+  input.focus();
+  input.setSelectionRange(caret, caret);
+  // Completing an operator immediately offers its values; completing a value
+  // (trailing space) moves on to a fresh operator list.
+  searchAcUpdate();
+}
+
+function searchAcKeydown(ev) {
+  if (!SEARCH_AC.items.length) return;
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    const n = SEARCH_AC.items.length;
+    SEARCH_AC.active = (SEARCH_AC.active + (ev.key === "ArrowDown" ? 1 : n - 1)) % n;
+    searchAcRender();
+  } else if (ev.key === "Tab" || (ev.key === "Enter" && SEARCH_AC.active >= 0)) {
+    ev.preventDefault();
+    searchAcAccept(SEARCH_AC.active);
+  } else if (ev.key === "Escape") {
+    searchAcClose();
+  }
+}
+
+{
+  const input = $("inbox-search-input");
+  if (input) {
+    input.addEventListener("input",  searchAcUpdate);
+    input.addEventListener("focus",  searchAcUpdate);
+    input.addEventListener("click",  searchAcUpdate);
+    input.addEventListener("keydown", searchAcKeydown);
+    input.addEventListener("blur",   () => setTimeout(searchAcClose, 120));
+  }
+}
 
 $("inbox-compose")?.addEventListener("click", () => openCompose());
 $("compose-cancel")?.addEventListener("click", closeCompose);
