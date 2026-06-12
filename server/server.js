@@ -772,14 +772,29 @@ function normalizeStatusz(parsed) {
   if (parsed.status || parsed.last_run) {
     const lr = parsed.last_run || {};
     const running = parsed.status === "running";
-    return {
-      generated_at: parsed.generated_at || parsed.finished_at || null,
-      jobs: [{
-        job_id: "pipeline",
-        status: running ? "running" : (lr.status || parsed.status || "unknown"),
-        last_run_at: lr.finished_at || parsed.finished_at || lr.started_at || parsed.started_at || null,
-      }],
+    const job = {
+      job_id: "pipeline",
+      status: running ? "running" : (lr.status || parsed.status || "unknown"),
+      last_run_at: lr.finished_at || parsed.finished_at || lr.started_at || parsed.started_at || null,
     };
+    if (running && Number.isFinite(parsed.step_number) && Number.isFinite(parsed.total_steps)) {
+      job.progress = { step: parsed.current_step || "", n: parsed.step_number, total: parsed.total_steps };
+    }
+    // Substeps come keyed by step number, each a list of { name, status }.
+    // Failures are worth a chip on the card even while the run is green-path.
+    if (parsed.substeps && typeof parsed.substeps === "object") {
+      const failed = [];
+      for (const list of Object.values(parsed.substeps)) {
+        if (!Array.isArray(list)) continue;
+        for (const s of list) if (s && s.status === "failed" && s.name) failed.push(s.name);
+      }
+      if (failed.length) job.substeps_failed = failed;
+    }
+    const lastDone = Array.isArray(parsed.runs)
+      ? parsed.runs.find(r => r && r.status !== "running" && r.duration_ms != null)
+      : null;
+    if (lastDone) job.last_duration_s = Math.round(lastDone.duration_ms / 1000);
+    return { generated_at: parsed.generated_at || parsed.finished_at || null, jobs: [job] };
   }
   return { generated_at: parsed.generated_at || null, jobs: [] };
 }
@@ -803,6 +818,11 @@ function fetchStatuszOnce(target) {
       r.on("data", c => chunks.push(c));
       r.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
+        if (r.statusCode === 401 || r.statusCode === 403) {
+          // Auth-gated statusz (gateway requires INTERNAL_API_KEY since pivi
+          // PR #996 was closed unmerged). Not an outage — render as locked.
+          return resolve({ ok: false, auth_required: true, error: `auth required (http ${r.statusCode})`, status_code: r.statusCode });
+        }
         if (r.statusCode < 200 || r.statusCode >= 300) {
           return resolve({ ok: false, error: `http ${r.statusCode}`, status_code: r.statusCode });
         }
@@ -841,7 +861,283 @@ async function gatherProd() {
     url:  t.url,
     ...(await fetchStatuszCached(t)),
   })));
-  return { targets: results };
+  return { targets: results, health: snapshotHealth(), deploys: await gatherDeploys() };
+}
+
+// ── PROD health / uptime tracker ────────────────────────────────────────────
+// Background pollers (one tick for all targets) so up/down transitions are
+// caught even when no dashboard tab is open. Latency samples live in memory
+// (24h window); up/down transitions are the durable part and are persisted to
+// a small JSON state file so incident history survives a restart. A state
+// file is not a database: same pattern as the calendar/gmail caches.
+
+const HEALTH_STATE_FILE = path.join(configMod.CONFIG_DIR, "prod-history.json");
+const HEALTH_WINDOW_MS  = 24 * 3600_000;
+const HEALTH_MAX_TRANSITIONS = 100;
+
+const healthState = new Map();  // name → { samples: [{t, ok, ms}], transitions: [{t, up}], last }
+let healthTimer = null;
+
+function loadHealthState() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(HEALTH_STATE_FILE, "utf8"));
+    for (const [name, transitions] of Object.entries(saved.transitions || {})) {
+      if (Array.isArray(transitions)) healthState.set(name, { samples: [], transitions, last: null });
+    }
+  } catch { /* first run or unreadable — start clean */ }
+}
+
+function persistHealthState() {
+  const transitions = {};
+  for (const [name, st] of healthState) transitions[name] = st.transitions;
+  try {
+    fs.mkdirSync(configMod.CONFIG_DIR, { recursive: true });
+    const tmp = HEALTH_STATE_FILE + ".tmp-" + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify({ transitions }) + "\n", { mode: 0o600 });
+    fs.renameSync(tmp, HEALTH_STATE_FILE);
+  } catch { /* best effort */ }
+}
+
+function pingHealthOnce(target) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(target.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const t0 = Date.now();
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...target.headers },
+      timeout:  8000,
+    }, r => {
+      const chunks = [];
+      let size = 0;
+      r.on("data", c => { size += c.length; if (size <= 65536) chunks.push(c); });
+      r.on("end", () => {
+        const out = {
+          // A redirect still means the edge answered; landing/app live behind
+          // hosts that 30x bare domains to www.
+          ok: r.statusCode >= 200 && r.statusCode < 400,
+          status_code: r.statusCode,
+          latency_ms: Date.now() - t0,
+        };
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (typeof parsed.version === "string")     out.version = parsed.version;
+          if (typeof parsed.environment === "string") out.environment = parsed.environment;
+          if (typeof parsed.pipeline_env === "string") out.environment = parsed.pipeline_env;
+          if (Number.isFinite(parsed.uptime_seconds)) out.service_uptime_s = Math.round(parsed.uptime_seconds);
+        } catch { /* non-JSON body — liveness only */ }
+        resolve(out);
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message, latency_ms: Date.now() - t0 }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout", latency_ms: Date.now() - t0 }); });
+    req.end();
+  });
+}
+
+async function tickHealth() {
+  const targets = Array.isArray(cfg.prodHealth) ? cfg.prodHealth : [];
+  await Promise.all(targets.map(async (t) => {
+    const name = t.name || t.url;
+    const r = await pingHealthOnce(t);
+    let st = healthState.get(name);
+    if (!st) { st = { samples: [], transitions: [], last: null }; healthState.set(name, st); }
+    const now = Date.now();
+    st.samples.push({ t: now, ok: r.ok, ms: r.latency_ms });
+    const cutoff = now - HEALTH_WINDOW_MS;
+    while (st.samples.length && st.samples[0].t < cutoff) st.samples.shift();
+
+    const prevUp = st.last ? st.last.ok : null;
+    st.last = { ...r, url: t.url, checked_at: new Date(now).toISOString() };
+    if (prevUp !== null && prevUp !== r.ok) {
+      st.transitions.push({ t: now, up: r.ok });
+      if (st.transitions.length > HEALTH_MAX_TRANSITIONS) st.transitions.shift();
+      persistHealthState();
+    }
+  }));
+}
+
+function snapshotHealth() {
+  const targets = Array.isArray(cfg.prodHealth) ? cfg.prodHealth : [];
+  return targets.map((t) => {
+    const name = t.name || t.url;
+    const st = healthState.get(name);
+    if (!st || !st.last) return { name, url: t.url, ok: null, pending: true };
+
+    const okCount = st.samples.filter(s => s.ok).length;
+    const uptimePct = st.samples.length ? (okCount / st.samples.length) * 100 : null;
+    const lastFlip = st.transitions.length ? st.transitions[st.transitions.length - 1] : null;
+
+    // Last incident: most recent down→up pair (or a still-open down).
+    let incident = null;
+    for (let i = st.transitions.length - 1; i >= 0; i--) {
+      const tr = st.transitions[i];
+      if (!tr.up) {
+        const end = st.transitions[i + 1] && st.transitions[i + 1].up ? st.transitions[i + 1].t : null;
+        incident = {
+          started_at: new Date(tr.t).toISOString(),
+          ended_at:   end ? new Date(end).toISOString() : null,
+          duration_s: Math.round(((end || Date.now()) - tr.t) / 1000),
+        };
+        break;
+      }
+    }
+
+    const latencies = st.samples.slice(-32).map(s => (Number.isFinite(s.ms) ? s.ms : 0));
+    return {
+      name,
+      url: t.url,
+      ...st.last,
+      uptime_pct: uptimePct == null ? null : Math.round(uptimePct * 100) / 100,
+      window_s: st.samples.length ? Math.round((Date.now() - st.samples[0].t) / 1000) : 0,
+      since: lastFlip ? new Date(lastFlip.t).toISOString() : null,
+      last_incident: incident,
+      spark_latency: sparkline(latencies, Math.max(200, ...latencies)),
+    };
+  });
+}
+
+function startHealthPoller() {
+  if (healthTimer) clearInterval(healthTimer);
+  const sec = Math.max(15, Number(cfg.prodHealthIntervalSec) || 60);
+  tickHealth();
+  healthTimer = setInterval(tickHealth, sec * 1000);
+}
+
+loadHealthState();
+startHealthPoller();
+
+// ── PROD deployments (gh CLI) ───────────────────────────────────────────────
+// Deployed version + branch, in-flight deploy progress, and an ETA derived
+// from the median duration of recent successful runs. Uses the local `gh`
+// binary and its auth; glance never stores a GitHub token. Cached with an
+// in-flight guard like the statusz fetcher so dashboard clients can't fan out
+// into API-rate-limit territory.
+
+const deployCache = { fetched_at: 0, result: null, inflight: null };
+
+function runGh(args, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const out = [], err = [];
+    const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, timeoutMs);
+    child.stdout.on("data", c => out.push(c));
+    child.stderr.on("data", c => err.push(c));
+    child.on("close", code => {
+      clearTimeout(killer);
+      resolve({ ok: code === 0, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") });
+    });
+    child.on("error", e => { clearTimeout(killer); resolve({ ok: false, stdout: "", stderr: e.message }); });
+  });
+}
+
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+
+function medianDurationS(runs) {
+  const ds = runs
+    .filter(r => r.status === "completed" && r.conclusion === "success" && r.startedAt && r.updatedAt)
+    .map(r => (Date.parse(r.updatedAt) - Date.parse(r.startedAt)) / 1000)
+    .filter(d => Number.isFinite(d) && d > 0)
+    .sort((a, b) => a - b);
+  if (!ds.length) return null;
+  return Math.round(ds[Math.floor(ds.length / 2)]);
+}
+
+async function fetchWorkflowDeploy(t) {
+  const fields = "headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,url,displayTitle";
+  const r = await runGh(["run", "list", "--repo", t.repo, "--workflow", t.workflow, "--limit", "6", "--json", fields]);
+  if (!r.ok) return { ok: false, error: (r.stderr || "gh failed").trim().slice(0, 200) };
+  let runs;
+  try { runs = JSON.parse(r.stdout); } catch (e) { return { ok: false, error: "bad gh output: " + e.message }; }
+  if (!Array.isArray(runs) || !runs.length) return { ok: false, error: "no runs" };
+  const latest = runs[0];
+  const startedAt = latest.startedAt || latest.createdAt;
+  const out = {
+    ok: true,
+    branch: latest.headBranch,
+    sha: latest.headSha,
+    title: latest.displayTitle,
+    run_url: latest.url,
+    started_at: startedAt,
+  };
+  if (latest.status !== "completed") {
+    const elapsed = Math.round((Date.now() - Date.parse(startedAt)) / 1000);
+    const typical = medianDurationS(runs.slice(1));
+    out.status = "deploying";
+    out.elapsed_s = Number.isFinite(elapsed) ? elapsed : null;
+    out.typical_s = typical;
+    out.eta_s = typical != null && out.elapsed_s != null ? Math.max(0, typical - out.elapsed_s) : null;
+  } else {
+    out.status = latest.conclusion || "unknown";
+    out.finished_at = latest.updatedAt;
+    const d = (Date.parse(latest.updatedAt) - Date.parse(startedAt)) / 1000;
+    if (Number.isFinite(d) && d > 0) out.duration_s = Math.round(d);
+  }
+  return out;
+}
+
+async function fetchDeploymentDeploy(t) {
+  const env = t.environment || "Production";
+  const r = await runGh(["api", `repos/${t.repo}/deployments?environment=${encodeURIComponent(env)}&per_page=1`]);
+  if (!r.ok) return { ok: false, error: (r.stderr || "gh failed").trim().slice(0, 200) };
+  let deps;
+  try { deps = JSON.parse(r.stdout); } catch (e) { return { ok: false, error: "bad gh output: " + e.message }; }
+  if (!Array.isArray(deps) || !deps.length) return { ok: false, error: "no deployments" };
+  const d = deps[0];
+  const s = await runGh(["api", `repos/${t.repo}/deployments/${d.id}/statuses?per_page=1`]);
+  let state = "unknown", stateAt = null, targetUrl = null;
+  if (s.ok) {
+    try {
+      const sts = JSON.parse(s.stdout);
+      if (Array.isArray(sts) && sts.length) {
+        state = sts[0].state || "unknown";
+        stateAt = sts[0].created_at || null;
+        targetUrl = sts[0].environment_url || sts[0].target_url || null;
+      }
+    } catch { /* keep unknown */ }
+  }
+  const statusMap = { success: "success", failure: "failure", error: "failure", in_progress: "deploying", queued: "deploying", pending: "deploying", inactive: "inactive" };
+  return {
+    ok: true,
+    // Vercel reports ref as the bare commit sha; showing it as a "branch"
+    // would render a 40-char hex string where a name belongs.
+    branch: /^[0-9a-f]{40}$/i.test(d.ref || "") ? null : d.ref,
+    sha: d.sha,
+    status: statusMap[state] || state,
+    started_at: d.created_at,
+    finished_at: stateAt,
+    run_url: targetUrl || `https://github.com/${t.repo}/deployments`,
+  };
+}
+
+async function fetchDeploysOnce() {
+  const targets = Array.isArray(cfg.deployTargets) ? cfg.deployTargets : [];
+  return Promise.all(targets.map(async (t) => {
+    const base = { name: t.name || t.repo, repo: t.repo, kind: t.kind };
+    if (!t.repo || !REPO_RE.test(t.repo)) return { ...base, ok: false, error: "bad repo" };
+    const r = t.kind === "deployment" ? await fetchDeploymentDeploy(t) : await fetchWorkflowDeploy(t);
+    if (r.sha) r.sha7 = String(r.sha).slice(0, 7);
+    return { ...base, ...r };
+  }));
+}
+
+function gatherDeploys() {
+  const ttl = Math.max(30, Number(cfg.deployRefreshSec) || 120) * 1000;
+  if (deployCache.result && (Date.now() - deployCache.fetched_at) < ttl) return Promise.resolve(deployCache.result);
+  if (!deployCache.inflight) {
+    deployCache.inflight = fetchDeploysOnce().then(list => {
+      deployCache.result = { targets: list, fetched_at: new Date().toISOString() };
+      deployCache.fetched_at = Date.now();
+      deployCache.inflight = null;
+      return deployCache.result;
+    });
+  }
+  return deployCache.inflight;
 }
 
 async function gatherState() {
@@ -1031,6 +1327,9 @@ if (Array.isArray(cfg.customWidgets)) applyCustomConfig(cfg.customWidgets);
 async function actionRefresh() {
   try { fs.unlinkSync(CAL_CACHE); } catch {}
   try { fs.unlinkSync(GMAIL_CACHE); } catch {}
+  prodCache.clear();
+  deployCache.fetched_at = 0;
+  deployCache.result = null;
   return gatherState();
 }
 
@@ -1463,6 +1762,7 @@ const servers = BIND_HOSTS.map((host) => {
 // Graceful shutdown so the extension can stop us cleanly.
 function shutdown() {
   for (const id of [...customTimers.keys()]) stopCustomPoller(id);
+  if (healthTimer) clearInterval(healthTimer);
   let pending = servers.length;
   for (const s of servers) s.close(() => { if (--pending === 0) process.exit(0); });
   setTimeout(() => process.exit(1), 2000).unref();

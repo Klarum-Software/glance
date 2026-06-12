@@ -411,6 +411,44 @@ html, body {
 .tcard-prod.warn { --accent: var(--warn); }
 .tcard-prod.skip { --accent: var(--ink-4); opacity: 0.6; }
 .tcard-prod .tcard-value { text-transform: uppercase; }
+.tcard-prod .tcard-value.prod-down { color: var(--neg); }
+
+.tcard-badge.bad  { color: var(--neg); background: rgba(239,121,114,0.13); border-color: rgba(239,121,114,0.30); }
+.tcard-badge.mute { opacity: 0.75; }
+.tcard-badge.mono { text-transform: none; }
+
+.prod-spark {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: -1px;
+  flex-shrink: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+a.tcard-title.prod-link { text-decoration: none; }
+a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent); }
+
+.prod-progress { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+.prod-progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-3);
+  overflow: hidden;
+}
+.prod-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.prod-progress-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
 
 /* ── remote column ────────────────────────────────────────────────────── */
 
