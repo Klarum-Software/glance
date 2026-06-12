@@ -2,8 +2,16 @@
 // and re-renders. Buttons POST to action endpoints.
 
 const REFRESH_MS = 30_000;
-const TODAY      = new Date().toISOString().slice(0, 10);
-const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+// Local-date keys, not toISOString (UTC): in any non-UTC timezone the UTC day
+// flips at the wrong wall-clock time and today/tomorrow labels go stale.
+const localDayKey = (offsetDays = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+const TODAY    = localDayKey(0);
+const TOMORROW = localDayKey(1);
 
 const TERM_POLL_MS  = 1200;
 
@@ -508,45 +516,99 @@ function renderSessions(state) {
   list.appendChild(legendRow("free", "free", freeKb));
 }
 
+// Pivi-timeline rendering for the calendar: a vertical day rail (mono
+// uppercase day heads, today in brand), a hairline spine with event nodes,
+// chip-styled events with the 3px accent stripe, urgency-toned times, and a
+// dashed "now" marker inside today. Mirrors pivi's timeline-canvas chips.
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function calDaySub(dayIso, withWeekday) {
+  const d = new Date(dayIso + "T12:00:00");
+  const date = `${d.getDate()} ${MON_NAMES[d.getMonth()]}`;
+  return withWeekday ? `${DAY_NAMES[d.getDay()]} ${date}` : date;
+}
+
+function calEventRow(ev, now) {
+  const timed = ev.start.length >= 16;
+  const time  = timed ? ev.start.slice(11, 16) : "all day";
+  const startMs = Date.parse(timed ? ev.start : ev.start + "T23:59:59");
+  const minsAway = (startMs - now) / 60_000;
+  const state = !Number.isFinite(minsAway) ? ""
+    : minsAway < 0    ? "past"
+    : minsAway <= 60  ? "soon"
+    : "";
+  return el("div", { class: "cal-tl-ev" + (state ? " " + state : ""), title: ev.summary },
+    el("span", { class: "cal-tl-time" }, time),
+    el("span", { class: "cal-tl-node" }),
+    el("div", { class: "cal-tl-chip" },
+      el("span", { class: "cal-tl-stripe" }),
+      el("span", { class: "cal-tl-summary" }, ev.summary),
+    ),
+  );
+}
+
+function calNowRow() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return el("div", { class: "cal-tl-nowrow" },
+    el("span", { class: "cal-tl-time now" }, `${hh}:${mm}`),
+    el("span", { class: "cal-tl-nowline" }),
+  );
+}
+
 function renderCalendar(cal) {
   const list = $("calendar-list");
   list.replaceChildren();
   if (!cal.authed) {
-    list.appendChild(el("li", { class: "empty" }, "not authed — run: node server/bin/google-auth.js --calendar"));
+    list.appendChild(el("div", { class: "empty" }, "not authed — run: node server/bin/google-auth.js --calendar"));
     $("calendar-meta").textContent = "";
     return;
   }
   if (cal.fetch_failed) {
-    list.appendChild(el("li", { class: "empty" }, "fetch failed"));
+    list.appendChild(el("div", { class: "empty" }, "fetch failed"));
     $("calendar-meta").textContent = "";
     return;
   }
   if (!cal.events.length) {
-    list.appendChild(el("li", { class: "empty" }, "nothing in the next 7 days"));
+    list.appendChild(el("div", { class: "empty" }, "nothing in the next 7 days"));
     $("calendar-meta").textContent = "";
     return;
   }
   $("calendar-meta").textContent = `· ${cal.events.length} upcoming`;
 
-  // group by day, preserving order
+  const now = Date.now();
   const byDay = new Map();
   for (const ev of cal.events) {
     const day = ev.start.slice(0, 10);
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push(ev);
   }
+
   for (const [day, evs] of byDay) {
-    const label = day === TODAY ? "today" : day === TOMORROW ? "tomorrow" : day;
-    list.appendChild(el("li", { class: "cal-day" }, label));
+    const isToday = day === TODAY;
+    const isNamed = isToday || day === TOMORROW;
+    const label = isToday ? "today" : day === TOMORROW ? "tomorrow" : DAY_NAMES[new Date(day + "T12:00:00").getDay()].toLowerCase();
+    const group = el("div", { class: "cal-tl-day" + (isToday ? " today" : "") },
+      el("div", { class: "cal-tl-dayhead" },
+        el("span", { class: "cal-tl-daylabel" }, label),
+        el("span", { class: "cal-tl-daysub" }, calDaySub(day, isNamed)),
+      ),
+    );
+    const rail = el("div", { class: "cal-tl-events" });
+    let nowPlaced = !isToday;
     for (const ev of evs) {
-      const time = ev.start.length >= 16 ? ev.start.slice(11, 16) : "all day";
-      list.appendChild(
-        el("li", { class: "cal-event", title: ev.summary },
-          el("span", { class: "cal-time" }, time),
-          el("span", { class: "cal-summary" }, ev.summary),
-        )
-      );
+      const timed = ev.start.length >= 16;
+      if (!nowPlaced && timed && Date.parse(ev.start) > now) {
+        rail.appendChild(calNowRow());
+        nowPlaced = true;
+      }
+      rail.appendChild(calEventRow(ev, now));
     }
+    if (!nowPlaced) rail.appendChild(calNowRow());
+    group.appendChild(rail);
+    list.appendChild(group);
   }
 }
 
