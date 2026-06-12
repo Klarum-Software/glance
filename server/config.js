@@ -101,6 +101,10 @@ const DEFAULTS = {
   // endpoint (GET /api/v2/metrics). Renders locked until the token is added:
   //   "prodFleet": { "url": "...", "headers": { "Authorization": "Bearer <SERVICE_TOKEN>" } }
   prodFleet: { url: "https://api.klarum.com/api/v2/metrics" },
+  // SSE fast-lane tick (seconds): how often claude sessions are rescanned and
+  // pushed to /api/events subscribers (remote presence + tmux go every other
+  // tick). Only runs while a subscriber is connected.
+  liveRefreshSec: 3,
 };
 
 function load() {
@@ -138,6 +142,7 @@ function load() {
   if (process.env.GLANCE_PROD_FLEET) {
     try { env.prodFleet = JSON.parse(process.env.GLANCE_PROD_FLEET); } catch { /* keep file/default */ }
   }
+  if (process.env.GLANCE_LIVE_REFRESH_SEC) env.liveRefreshSec = Number(process.env.GLANCE_LIVE_REFRESH_SEC);
 
   return { ...DEFAULTS, ...user, ...env };
 }
