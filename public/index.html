@@ -135,16 +135,31 @@
           <button class="col-action" id="inbox-compose" title="compose new email">+</button>
         </h2>
         <form class="inbox-search" id="inbox-search-form" autocomplete="off">
-          <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'>
+          <input type="search" id="inbox-search-input" placeholder='search mail (Gmail query, e.g. from:alice has:attachment)'
+                 role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="inbox-search-ac">
           <button type="button" class="btn btn-sm" id="inbox-search-clear" hidden>x</button>
+          <div class="search-ac" id="inbox-search-ac" role="listbox" hidden></div>
         </form>
         <div class="mail-body">
           <div class="mail-section">
             <div class="mail-subhead">CALENDAR <span class="col-meta" id="calendar-meta"></span></div>
-            <ul class="list cal-list" id="calendar-list"></ul>
+            <div class="cal-tl" id="calendar-list"></div>
           </div>
           <div class="mail-section mail-inbox">
-            <div class="mail-subhead">INBOX <span class="col-meta" id="inbox-meta"></span></div>
+            <div class="mail-subhead">
+              <input type="checkbox" class="inbox-check" id="inbox-select-all" title="select all">
+              INBOX <span class="col-meta" id="inbox-meta"></span>
+            </div>
+            <div class="inbox-bulkbar" id="inbox-bulkbar" hidden>
+              <span class="inbox-bulk-count" id="inbox-bulk-count"></span>
+              <button class="btn btn-xs" data-bulk="read">mark read</button>
+              <button class="btn btn-xs" data-bulk="archive">archive</button>
+              <select class="inbox-bulk-move" id="inbox-bulk-move">
+                <option value="">move to...</option>
+              </select>
+              <button class="btn btn-xs btn-danger" data-bulk="trash">delete</button>
+              <button class="btn btn-xs" data-bulk="clear">clear</button>
+            </div>
             <ul class="list" id="inbox-list"></ul>
           </div>
         </div>

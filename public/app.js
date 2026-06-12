@@ -2,8 +2,16 @@
 // and re-renders. Buttons POST to action endpoints.
 
 const REFRESH_MS = 30_000;
-const TODAY      = new Date().toISOString().slice(0, 10);
-const TOMORROW   = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+// Local-date keys, not toISOString (UTC): in any non-UTC timezone the UTC day
+// flips at the wrong wall-clock time and today/tomorrow labels go stale.
+const localDayKey = (offsetDays = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+const TODAY    = localDayKey(0);
+const TOMORROW = localDayKey(1);
 
 const TERM_POLL_MS  = 1200;
 
@@ -142,30 +150,24 @@ function renderPeerRow(p) {
     : "—";
   const loadTxt = typeof s.load_1m === "number" ? s.load_1m.toFixed(2) : "—";
   const memTxt  = s.mem_pct != null ? `${s.mem_pct}%` : "—";
+  const memCls  = s.mem_pct >= 85 ? " hot" : s.mem_pct >= 70 ? " warm" : "";
+
+  const cell = (key, valTxt, opts = {}) => el("div", { class: "peer-cell" + (opts.wide ? " wide" : "") },
+    el("span", { class: "peer-key" }, key),
+    el("span", { class: "peer-val" + (opts.cls || ""), title: opts.title || "" }, valTxt),
+    opts.spark ? el("span", { class: "peer-spark", title: opts.sparkTitle || "" }, opts.spark) : null,
+  );
 
   return card(p.is_self ? "self" : "",
     head,
     el("div", { class: "peer-grid" },
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "up"),
-        el("span", { class: "peer-val" }, fmtUptime(s.uptime_s)),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "load"),
-        el("span", { class: "peer-val" }, `${loadTxt} · mem ${memTxt}`),
-      ),
-      el("div", { class: "peer-cell wide" },
-        el("span", { class: "peer-key" }, "tmux"),
-        el("span", { class: "peer-val" }, sessTxt),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "git"),
-        el("span", { class: "peer-val" }, gitTxt),
-      ),
-      el("div", { class: "peer-cell" },
-        el("span", { class: "peer-key" }, "claude"),
-        el("span", { class: "peer-val claude-procs" }, `${claudeRunning} running`),
-      ),
+      cell("up",     fmtUptime(s.uptime_s)),
+      cell("load",   loadTxt, { spark: s.spark_load, sparkTitle: "1m load, recent samples" }),
+      cell("mem",    memTxt,  { cls: memCls, spark: s.spark_mem, sparkTitle: "memory %, recent samples" }),
+      cell("claude", claudeRunning ? `${claudeRunning} running` : "idle",
+        { cls: claudeRunning ? " claude-procs" : "" }),
+      cell("tmux",   sessTxt, { wide: true, title: sessTxt }),
+      cell("git",    gitTxt,  { wide: true, title: gitTxt }),
     ),
   );
 }
@@ -189,26 +191,150 @@ function renderRemote(r) {
   }
 
   const online = r.peers.filter(p => p.online).length;
-  meta.textContent = `· ${online}/${r.peers.length} online`;
+  meta.textContent = `· ${online}/${r.peers.length} online` + liveSuffix();
   for (const p of r.peers) grid.appendChild(renderPeerRow(p));
 }
 
 const PROD_STATUS_CLASS = { succeeded: "ok", failed: "bad", running: "warn", skipped: "skip" };
 
+function fmtDur(s) {
+  if (!Number.isFinite(s) || s < 0) return "—";
+  if (s < 60)    return `${Math.round(s)}s`;
+  if (s < 3600)  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 function renderProdJob(job) {
   const variant = PROD_STATUS_CLASS[job.status] || "skip";
+  const badges = [el("span", { class: "tcard-badge" }, "ran " + fmtAgo(job.last_run_at))];
+  if (job.last_duration_s != null) badges.push(el("span", { class: "tcard-badge mute" }, "took " + fmtDur(job.last_duration_s)));
+  for (const name of job.substeps_failed || []) {
+    badges.push(el("span", { class: "tcard-badge bad" }, name + " failed"));
+  }
+  const bodyKids = [
+    el("div", { class: "tcard-head" },
+      el("span", { class: "tcard-title" }, job.job_id || "—"),
+      el("span", { class: "tcard-value" }, job.status || "—"),
+    ),
+  ];
+  if (job.progress && job.progress.total) {
+    bodyKids.push(el("div", { class: "prod-progress" },
+      el("div", { class: "prod-progress-track" },
+        el("div", { class: "prod-progress-fill", style: `width:${Math.min(100, job.progress.n / job.progress.total * 100).toFixed(1)}%` })),
+      el("span", { class: "prod-progress-label" }, `step ${job.progress.n}/${job.progress.total} · ${job.progress.step}`),
+    ));
+  }
+  bodyKids.push(el("div", { class: "tcard-badges" }, ...badges));
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" }, ...bodyKids),
+  );
+}
+
+function renderHealthCard(h) {
+  if (h.pending) {
+    return el("div", { class: "tcard tcard-prod skip" },
+      el("div", { class: "tcard-accent" }),
+      el("div", { class: "tcard-body" },
+        el("div", { class: "tcard-head" },
+          el("span", { class: "tcard-title" }, h.name),
+          el("span", { class: "tcard-value" }, "checking…"))));
+  }
+  const variant = h.ok ? "ok" : "bad";
+  const badges = [];
+  if (h.version)     badges.push(el("span", { class: "tcard-badge info" }, "v" + h.version));
+  if (h.environment) badges.push(el("span", { class: "tcard-badge mute" }, h.environment));
+  if (Number.isFinite(h.latency_ms)) badges.push(el("span", { class: "tcard-badge" }, h.latency_ms + " ms"));
+  if (h.uptime_pct != null) {
+    badges.push(el("span", { class: "tcard-badge" + (h.uptime_pct < 100 ? " warn" : "") },
+      `${h.uptime_pct}% over ${fmtUptime(h.window_s)}`));
+  }
+  if (h.last_incident) {
+    const inc = h.last_incident;
+    badges.push(el("span", { class: "tcard-badge warn", title: inc.started_at },
+      `last incident ${fmtAgo(inc.started_at)} · ${fmtDur(inc.duration_s)}`));
+  }
+  const statusTxt = h.ok
+    ? "up" + (h.since ? " · " + fmtAgo(h.since).replace(" ago", "") : "")
+    : (h.error || `http ${h.status_code}`);
   return el("div", { class: "tcard tcard-prod " + variant },
     el("div", { class: "tcard-accent" }),
     el("div", { class: "tcard-body" },
       el("div", { class: "tcard-head" },
-        el("span", { class: "tcard-title" }, job.job_id || "—"),
-        el("span", { class: "tcard-value" }, job.status || "—"),
+        el("span", { class: "tcard-title", title: h.url }, h.name),
+        h.spark_latency ? el("span", { class: "prod-spark", title: "latency, last 32 checks" }, h.spark_latency) : null,
+        el("span", { class: "tcard-value" + (h.ok ? "" : " prod-down") }, statusTxt),
       ),
-      el("div", { class: "tcard-badges" },
-        el("span", { class: "tcard-badge" }, "ran " + fmtAgo(job.last_run_at)),
-      ),
+      el("div", { class: "tcard-badges" }, ...badges),
     ),
   );
+}
+
+function renderFleetCard(m) {
+  const healthy = m.status === "healthy" && !m.stale;
+  const variant = m.stale ? "warn" : (m.status === "healthy" ? "ok" : "bad");
+  const badges = [el("span", { class: "tcard-badge mute" }, m.service)];
+  if (m.uptime_s != null) badges.push(el("span", { class: "tcard-badge" }, "up " + fmtUptime(m.uptime_s)));
+  if (m.last_heartbeat)   badges.push(el("span", { class: "tcard-badge" + (m.stale ? " warn" : "") }, "hb " + fmtAgo(m.last_heartbeat)));
+  if (m.current_step)     badges.push(el("span", { class: "tcard-badge info" }, m.current_step));
+  if (m.last_job && m.last_job.status) {
+    badges.push(el("span", { class: "tcard-badge" + (m.last_job.status === "failed" ? " bad" : "") },
+      "job " + m.last_job.status));
+  }
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", { class: "tcard-head" },
+        el("span", { class: "tcard-title", title: m.machine_id }, m.hostname),
+        el("span", { class: "tcard-value" + (healthy ? "" : " prod-down") },
+          m.stale ? "stale" : m.status),
+      ),
+      el("div", { class: "tcard-badges" }, ...badges),
+    ),
+  );
+}
+
+const DEPLOY_STATUS_CLASS = { success: "ok", failure: "bad", deploying: "warn", cancelled: "skip", inactive: "skip" };
+
+function renderDeployCard(d) {
+  if (!d.ok) {
+    return el("div", { class: "tcard tcard-prod skip" },
+      el("div", { class: "tcard-accent" }),
+      el("div", { class: "tcard-body" },
+        el("div", { class: "tcard-head" },
+          el("span", { class: "tcard-title" }, d.name),
+          el("span", { class: "tcard-value" }, d.error || "unavailable"))));
+  }
+  const variant = DEPLOY_STATUS_CLASS[d.status] || "skip";
+  const badges = [];
+  const ref = d.branch ? d.branch + (d.sha7 ? "@" + d.sha7 : "") : d.sha7;
+  if (ref) badges.push(el("span", { class: "tcard-badge mono" }, ref));
+  if (d.status === "deploying") {
+    badges.push(el("span", { class: "tcard-badge warn" }, "elapsed " + fmtDur(d.elapsed_s)));
+    if (d.eta_s != null) badges.push(el("span", { class: "tcard-badge info" }, "~" + fmtDur(d.eta_s) + " left"));
+  } else {
+    if (d.finished_at)       badges.push(el("span", { class: "tcard-badge" }, fmtAgo(d.finished_at)));
+    if (d.duration_s != null) badges.push(el("span", { class: "tcard-badge mute" }, "took " + fmtDur(d.duration_s)));
+  }
+  const title = d.run_url
+    ? el("a", { class: "tcard-title prod-link", href: d.run_url, target: "_blank", rel: "noopener", title: d.title || d.run_url }, d.name)
+    : el("span", { class: "tcard-title" }, d.name);
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", { class: "tcard-head" },
+        title,
+        el("span", { class: "tcard-value" }, d.status === "deploying" ? "deploying…" : d.status),
+      ),
+      el("div", { class: "tcard-badges" }, ...badges),
+    ),
+  );
+}
+
+function prodSubhead(label, metaTxt, metaClass) {
+  const sub = el("div", { class: "mail-subhead" }, label);
+  if (metaTxt) sub.appendChild(el("span", { class: "col-meta" + (metaClass ? " " + metaClass : "") }, "· " + metaTxt));
+  return sub;
 }
 
 function renderProd(prod) {
@@ -217,22 +343,62 @@ function renderProd(prod) {
   body.replaceChildren();
 
   const targets = prod?.targets || [];
-  if (!targets.length) {
+  const health  = prod?.health || [];
+  const deploys = prod?.deploys?.targets || [];
+
+  if (!targets.length && !health.length && !deploys.length) {
     meta.textContent = "· no targets";
     body.appendChild(el("div", { class: "remote-empty" },
       el("div", { class: "remote-empty-title" }, "no prod targets configured"),
       el("div", { class: "remote-empty-hint" },
-        el("span", {}, "Set ", el("code", {}, "prodTargets"), " in config.json."),
+        el("span", {}, "Set ", el("code", {}, "prodHealth"), ", ", el("code", {}, "deployTargets"),
+          " or ", el("code", {}, "prodTargets"), " in config.json."),
       ),
     ));
     return;
   }
 
-  let failing = 0;
+  let down = 0, failing = 0;
+
+  if (health.length) {
+    const up = health.filter(h => h.ok).length;
+    down = health.filter(h => h.ok === false).length;
+    body.appendChild(prodSubhead("SERVICES", `${up}/${health.length} up`, down ? "prod-down" : ""));
+    for (const h of health) body.appendChild(renderHealthCard(h));
+  }
+
+  const fleet = prod?.fleet;
+  if (fleet) {
+    if (fleet.ok) {
+      const bad = fleet.machines.filter(m => m.stale || m.status !== "healthy").length;
+      body.appendChild(prodSubhead("FLEET", `${fleet.total - bad}/${fleet.total} healthy`, bad ? "prod-down" : ""));
+      if (!fleet.machines.length) body.appendChild(el("div", { class: "prod-empty" }, "no heartbeats yet"));
+      for (const m of fleet.machines) {
+        if (m.stale || m.status !== "healthy") failing++;
+        body.appendChild(renderFleetCard(m));
+      }
+    } else if (fleet.auth_required) {
+      body.appendChild(prodSubhead("FLEET", "locked (add the SERVICE_TOKEN to prodFleet.headers)"));
+    } else {
+      body.appendChild(prodSubhead("FLEET", fleet.error || "unreachable", "prod-down"));
+    }
+  }
+
+  if (deploys.length) {
+    const live = deploys.filter(d => d.ok && d.status === "deploying").length;
+    body.appendChild(prodSubhead("DEPLOYMENTS", live ? `${live} in flight` : null));
+    for (const d of deploys) {
+      if (d.ok && d.status === "failure") failing++;
+      body.appendChild(renderDeployCard(d));
+    }
+  }
+
   for (const t of targets) {
-    const sub = el("div", { class: "mail-subhead" }, t.name);
+    const sub = el("div", { class: "mail-subhead" }, "JOBS · " + t.name.toUpperCase());
     if (t.ok) {
       sub.appendChild(el("span", { class: "col-meta" }, "· " + fmtAgo(t.generated_at)));
+    } else if (t.auth_required) {
+      sub.appendChild(el("span", { class: "col-meta", title: "add an INTERNAL_API_KEY header to this prodTargets entry" }, "· locked (auth required)"));
     } else {
       sub.appendChild(el("span", { class: "col-meta prod-down" }, "· " + (t.error || "unreachable")));
     }
@@ -250,10 +416,10 @@ function renderProd(prod) {
     }
   }
 
-  const reachable = targets.filter(t => t.ok).length;
-  meta.textContent = failing
-    ? `· ${failing} failing`
-    : `· ${reachable}/${targets.length} up`;
+  meta.textContent = down
+    ? `· ${down} DOWN`
+    : failing ? `· ${failing} failing`
+    : "· all up";
 }
 
 function fmtBytes(kb) {
@@ -276,7 +442,7 @@ function renderSessions(state) {
 
   // ── header meta: "5.7G / 27G · 2 sess"
   meta.textContent =
-    `· ${fmtBytes(mem.used_kb)} / ${fmtBytes(totalKb)} · ${sessions.length} sess`;
+    `· ${fmtBytes(mem.used_kb)} / ${fmtBytes(totalKb)} · ${sessions.length} sess` + liveSuffix();
 
   // ── vertical stacked bar ────────────────────────────────────────────────
   // Anchored bottom: sessions first (in size order), then "other", then
@@ -350,45 +516,99 @@ function renderSessions(state) {
   list.appendChild(legendRow("free", "free", freeKb));
 }
 
+// Pivi-timeline rendering for the calendar: a vertical day rail (mono
+// uppercase day heads, today in brand), a hairline spine with event nodes,
+// chip-styled events with the 3px accent stripe, urgency-toned times, and a
+// dashed "now" marker inside today. Mirrors pivi's timeline-canvas chips.
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function calDaySub(dayIso, withWeekday) {
+  const d = new Date(dayIso + "T12:00:00");
+  const date = `${d.getDate()} ${MON_NAMES[d.getMonth()]}`;
+  return withWeekday ? `${DAY_NAMES[d.getDay()]} ${date}` : date;
+}
+
+function calEventRow(ev, now) {
+  const timed = ev.start.length >= 16;
+  const time  = timed ? ev.start.slice(11, 16) : "all day";
+  const startMs = Date.parse(timed ? ev.start : ev.start + "T23:59:59");
+  const minsAway = (startMs - now) / 60_000;
+  const state = !Number.isFinite(minsAway) ? ""
+    : minsAway < 0    ? "past"
+    : minsAway <= 60  ? "soon"
+    : "";
+  return el("div", { class: "cal-tl-ev" + (state ? " " + state : ""), title: ev.summary },
+    el("span", { class: "cal-tl-time" }, time),
+    el("span", { class: "cal-tl-node" }),
+    el("div", { class: "cal-tl-chip" },
+      el("span", { class: "cal-tl-stripe" }),
+      el("span", { class: "cal-tl-summary" }, ev.summary),
+    ),
+  );
+}
+
+function calNowRow() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return el("div", { class: "cal-tl-nowrow" },
+    el("span", { class: "cal-tl-time now" }, `${hh}:${mm}`),
+    el("span", { class: "cal-tl-nowline" }),
+  );
+}
+
 function renderCalendar(cal) {
   const list = $("calendar-list");
   list.replaceChildren();
   if (!cal.authed) {
-    list.appendChild(el("li", { class: "empty" }, "not authed — run: node server/bin/google-auth.js --calendar"));
+    list.appendChild(el("div", { class: "empty" }, "not authed — run: node server/bin/google-auth.js --calendar"));
     $("calendar-meta").textContent = "";
     return;
   }
   if (cal.fetch_failed) {
-    list.appendChild(el("li", { class: "empty" }, "fetch failed"));
+    list.appendChild(el("div", { class: "empty" }, "fetch failed"));
     $("calendar-meta").textContent = "";
     return;
   }
   if (!cal.events.length) {
-    list.appendChild(el("li", { class: "empty" }, "nothing in the next 7 days"));
+    list.appendChild(el("div", { class: "empty" }, "nothing in the next 7 days"));
     $("calendar-meta").textContent = "";
     return;
   }
   $("calendar-meta").textContent = `· ${cal.events.length} upcoming`;
 
-  // group by day, preserving order
+  const now = Date.now();
   const byDay = new Map();
   for (const ev of cal.events) {
     const day = ev.start.slice(0, 10);
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push(ev);
   }
+
   for (const [day, evs] of byDay) {
-    const label = day === TODAY ? "today" : day === TOMORROW ? "tomorrow" : day;
-    list.appendChild(el("li", { class: "cal-day" }, label));
+    const isToday = day === TODAY;
+    const isNamed = isToday || day === TOMORROW;
+    const label = isToday ? "today" : day === TOMORROW ? "tomorrow" : DAY_NAMES[new Date(day + "T12:00:00").getDay()].toLowerCase();
+    const group = el("div", { class: "cal-tl-day" + (isToday ? " today" : "") },
+      el("div", { class: "cal-tl-dayhead" },
+        el("span", { class: "cal-tl-daylabel" }, label),
+        el("span", { class: "cal-tl-daysub" }, calDaySub(day, isNamed)),
+      ),
+    );
+    const rail = el("div", { class: "cal-tl-events" });
+    let nowPlaced = !isToday;
     for (const ev of evs) {
-      const time = ev.start.length >= 16 ? ev.start.slice(11, 16) : "all day";
-      list.appendChild(
-        el("li", { class: "cal-event", title: ev.summary },
-          el("span", { class: "cal-time" }, time),
-          el("span", { class: "cal-summary" }, ev.summary),
-        )
-      );
+      const timed = ev.start.length >= 16;
+      if (!nowPlaced && timed && Date.parse(ev.start) > now) {
+        rail.appendChild(calNowRow());
+        nowPlaced = true;
+      }
+      rail.appendChild(calEventRow(ev, now));
     }
+    if (!nowPlaced) rail.appendChild(calNowRow());
+    group.appendChild(rail);
+    list.appendChild(group);
   }
 }
 
@@ -409,8 +629,109 @@ let INBOX_SETTINGS = { snippets: {}, has_summarizer: false };
 let INBOX_SEARCH_ACTIVE = false;
 let LAST_LIVE_INBOX = null;
 
+// ── inbox multiselect + bulk actions ────────────────────────────────────────
+// Selection survives re-renders (the 30s reload repaints rows); ids that left
+// the list are dropped so the count never refers to invisible mail.
+
+const INBOX_SEL = new Set();
+let INBOX_VISIBLE_IDS = [];
+let LABELS_LOADED = false;
+
+function toggleInboxSelect(id, on) {
+  if (on) INBOX_SEL.add(id); else INBOX_SEL.delete(id);
+  document.querySelector(`.inbox-row .inbox-check[data-id="${id}"]`)
+    ?.closest(".inbox-row")?.classList.toggle("selected", on);
+  updateBulkBar();
+}
+
+function pruneInboxSelection(items) {
+  INBOX_VISIBLE_IDS = items.map(m => m.id);
+  const visible = new Set(INBOX_VISIBLE_IDS);
+  for (const id of [...INBOX_SEL]) if (!visible.has(id)) INBOX_SEL.delete(id);
+}
+
+function clearInboxSelection() {
+  INBOX_SEL.clear();
+  for (const c of document.querySelectorAll(".inbox-row .inbox-check")) c.checked = false;
+  for (const r of document.querySelectorAll(".inbox-row.selected")) r.classList.remove("selected");
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = $("inbox-bulkbar");
+  if (!bar) return;
+  const n = INBOX_SEL.size;
+  bar.hidden = n === 0;
+  $("inbox-bulk-count").textContent = `${n} selected`;
+  const all = $("inbox-select-all");
+  if (all) {
+    all.checked = n > 0 && n === INBOX_VISIBLE_IDS.length;
+    all.indeterminate = n > 0 && n < INBOX_VISIBLE_IDS.length;
+  }
+  if (n > 0 && !LABELS_LOADED) loadInboxLabels();
+}
+
+async function loadInboxLabels() {
+  LABELS_LOADED = true;
+  try {
+    const r = await fetch("/api/inbox/labels", { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok || !Array.isArray(j.labels)) return;
+    const sel = $("inbox-bulk-move");
+    sel.replaceChildren(el("option", { value: "" }, "move to..."));
+    for (const l of j.labels) sel.appendChild(el("option", { value: l.id }, l.name));
+  } catch { LABELS_LOADED = false; }
+}
+
+async function runInboxBulk(action, labelId) {
+  const ids = [...INBOX_SEL];
+  if (!ids.length) return;
+  if (action === "trash" && !confirm(`Delete ${ids.length} email${ids.length === 1 ? "" : "s"}? They go to Gmail trash.`)) return;
+  try {
+    const body = { ids, action };
+    if (labelId) body.label_id = labelId;
+    const r = await fetch("/api/inbox/bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) return toast("bulk " + action + " failed: " + (j.error || r.status), 4000);
+    toast(`${action === "move" ? "moved" : action === "trash" ? "deleted" : action}: ${j.count} email${j.count === 1 ? "" : "s"}`);
+    clearInboxSelection();
+    reload();
+  } catch (e) {
+    toast("bulk failed: " + e.message, 4000);
+  }
+}
+
+$("inbox-bulkbar")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-bulk]");
+  if (!btn) return;
+  const act = btn.dataset.bulk;
+  if (act === "clear") return clearInboxSelection();
+  runInboxBulk(act);
+});
+
+$("inbox-bulk-move")?.addEventListener("change", (ev) => {
+  const labelId = ev.currentTarget.value;
+  ev.currentTarget.value = "";
+  if (labelId) runInboxBulk("move", labelId);
+});
+
+$("inbox-select-all")?.addEventListener("change", (ev) => {
+  const on = ev.currentTarget.checked;
+  for (const id of INBOX_VISIBLE_IDS) { if (on) INBOX_SEL.add(id); else INBOX_SEL.delete(id); }
+  for (const c of document.querySelectorAll(".inbox-row .inbox-check")) {
+    c.checked = on;
+    c.closest(".inbox-row")?.classList.toggle("selected", on);
+  }
+  updateBulkBar();
+});
+
 function renderInboxItem(m) {
   const tags = [];
+  if (m.is_alert) tags.push(el("span", { class: "inbox-tag alert" }, "invoice"));
   if (m.is_team)  tags.push(el("span", { class: "inbox-tag team" }, "team"));
   if (m.meeting)  tags.push(el("span", { class: "inbox-tag meeting", title: m.meeting.summary || "" },
     `· meeting ${fmtMeetingStart(m.meeting.start)}`));
@@ -422,10 +743,19 @@ function renderInboxItem(m) {
     el("button", { class: "btn btn-xs", "data-act": "archive",   "data-id": m.id }, "archive"),
   ];
 
+  const check = el("input", {
+    type: "checkbox",
+    class: "inbox-check",
+    "data-id": m.id,
+    on: { change: (ev) => toggleInboxSelect(m.id, ev.currentTarget.checked) },
+  });
+  if (INBOX_SEL.has(m.id)) check.checked = true;
+
   return el("li", {
-    class: "inbox-row" + (m.is_team ? " team" : ""),
+    class: "inbox-row" + (m.is_team ? " team" : "") + (m.is_alert ? " alert" : "") + (INBOX_SEL.has(m.id) ? " selected" : ""),
     title: m.from || "",
   },
+    check,
     el("span", { class: "inbox-from" }, shortFrom(m.from)),
     el("span", { class: "inbox-subject" },
       m.subject || "(no subject)",
@@ -451,12 +781,16 @@ function renderInbox(inbox) {
   if (!inbox.items || !inbox.items.length) {
     list.appendChild(el("li", { class: "empty" }, "inbox zero"));
     $("inbox-meta").textContent = inbox.important_only ? "· 0 important unread" : "· 0 unread";
+    pruneInboxSelection([]);
+    updateBulkBar();
     return;
   }
   $("inbox-meta").textContent = inbox.important_only
     ? `· ${inbox.unread_count} important unread`
     : `· ${inbox.unread_count} unread`;
+  pruneInboxSelection(inbox.items);
   for (const m of inbox.items) list.appendChild(renderInboxItem(m));
+  updateBulkBar();
 }
 
 function renderSearchResults(payload) {
@@ -465,12 +799,17 @@ function renderSearchResults(payload) {
   $("inbox-meta").textContent = `· search: ${payload.count} hit${payload.count === 1 ? "" : "s"}`;
   if (!payload.items.length) {
     list.appendChild(el("li", { class: "empty" }, "no matches"));
+    pruneInboxSelection([]);
+    updateBulkBar();
     return;
   }
+  pruneInboxSelection(payload.items);
   for (const m of payload.items) list.appendChild(renderInboxItem(m));
+  updateBulkBar();
 }
 
 function render(state) {
+  LAST_STATE = state;
   renderClock(state.now);
   renderServices(state.services || {});
   updateNavBadges(state);
@@ -481,6 +820,46 @@ function render(state) {
   renderCalendar(state.calendar);
   LAST_LIVE_INBOX = state.inbox;
   if (!INBOX_SEARCH_ACTIVE) renderInbox(state.inbox);
+}
+
+// ── live events (SSE) ───────────────────────────────────────────────────────
+// /api/events pushes sessions / remote / tmux deltas every few seconds; the
+// 30s /api/state poll stays as the fallback and covers everything else
+// (calendar, inbox, prod). EventSource reconnects on its own after a backend
+// restart, so there is no retry plumbing here.
+
+let LAST_STATE = null;
+let LIVE = false;
+
+function liveSuffix() {
+  return LIVE ? " · live" : "";
+}
+
+function initLiveEvents() {
+  if (typeof EventSource === "undefined") return;
+  const es = new EventSource("/api/events");
+  es.addEventListener("open",  () => { LIVE = true; });
+  es.addEventListener("error", () => { LIVE = false; });
+  es.addEventListener("sessions", (ev) => {
+    if (!LAST_STATE) return;
+    const d = JSON.parse(ev.data);
+    LAST_STATE.sessions = d.sessions;
+    LAST_STATE.memory   = d.memory;
+    renderSessions(LAST_STATE);
+    updateNavBadges(LAST_STATE);
+  });
+  es.addEventListener("remote", (ev) => {
+    if (!LAST_STATE) return;
+    LAST_STATE.remote = JSON.parse(ev.data);
+    renderRemote(LAST_STATE.remote);
+    updateNavBadges(LAST_STATE);
+  });
+  es.addEventListener("tmux", (ev) => {
+    if (!LAST_STATE) return;
+    LAST_STATE.tmux = JSON.parse(ev.data);
+    renderTerminalTabs(LAST_STATE.tmux);
+    updateNavBadges(LAST_STATE);
+  });
 }
 
 // ── terminal (tmux poll) ───────────────────────────────────────────────────
@@ -898,8 +1277,12 @@ function updateNavBadges(state) {
   document.querySelector('.nav-item[data-panel="mail"]')?.classList.toggle("has-alert", unread > 0);
 
   const prodTargets = state.prod?.targets || [];
-  const prodFailing = prodTargets.reduce(
-    (n, t) => n + (t.ok ? (t.jobs || []).filter(j => j.status === "failed").length : 1), 0);
+  const prodFailing =
+    prodTargets.reduce(
+      (n, t) => n + (t.ok ? (t.jobs || []).filter(j => j.status === "failed").length : (t.auth_required ? 0 : 1)), 0)
+    + (state.prod?.health || []).filter(h => h.ok === false).length
+    + (state.prod?.deploys?.targets || []).filter(d => d.ok && d.status === "failure").length
+    + (state.prod?.fleet?.ok ? state.prod.fleet.machines.filter(m => m.stale || m.status !== "healthy").length : 0);
   $("nav-badge-prod").textContent = prodFailing ? String(prodFailing) : "";
   document.querySelector('.nav-item[data-panel="prod"]')?.classList.toggle("has-alert", prodFailing > 0);
 }
@@ -1348,12 +1731,175 @@ async function runInboxSearch(q) {
 
 $("inbox-search-form")?.addEventListener("submit", (ev) => {
   ev.preventDefault();
+  searchAcClose();
   runInboxSearch($("inbox-search-input").value.trim());
 });
 $("inbox-search-clear")?.addEventListener("click", () => {
   $("inbox-search-input").value = "";
   runInboxSearch("");
 });
+
+// ── search autocomplete ─────────────────────────────────────────────────────
+// Programmatic, not agentic: a fixed registry of Gmail query operators with
+// per-operator value vocabularies. Completion is keyed off the token under
+// the caret; everything happens client-side except team emails (from
+// /api/inbox/settings, already loaded) and label names (lazy fetch, optional
+// endpoint, silently absent when the backend lacks it).
+
+let SEARCH_AC_LABELS = null;
+async function searchAcLabels() {
+  if (SEARCH_AC_LABELS) return SEARCH_AC_LABELS;
+  try {
+    const r = await fetch("/api/inbox/labels", { cache: "no-store" });
+    const j = await r.json();
+    // Gmail query syntax wants label names lowercased, spaces as hyphens.
+    SEARCH_AC_LABELS = (j.ok && Array.isArray(j.labels))
+      ? j.labels.map(l => l.name.toLowerCase().replace(/\s+/g, "-"))
+      : [];
+  } catch { SEARCH_AC_LABELS = []; }
+  return SEARCH_AC_LABELS;
+}
+
+function searchAcPeople() {
+  const team = Array.isArray(INBOX_SETTINGS.team_emails) ? INBOX_SETTINGS.team_emails : [];
+  return ["me", ...team];
+}
+
+const SEARCH_OPS = [
+  { op: "from:",        desc: "sender",            values: searchAcPeople },
+  { op: "to:",          desc: "recipient",         values: searchAcPeople },
+  { op: "cc:",          desc: "cc recipient",      values: searchAcPeople },
+  { op: "bcc:",         desc: "bcc recipient",     values: searchAcPeople },
+  { op: "subject:",     desc: "words in subject" },
+  { op: "label:",       desc: "has label",         values: () => SEARCH_AC_LABELS || (searchAcLabels(), []) },
+  { op: "is:",          desc: "message state",     values: () => ["unread", "read", "starred", "unstarred", "important", "snoozed", "muted"] },
+  { op: "in:",          desc: "location",          values: () => ["inbox", "sent", "drafts", "trash", "spam", "archive", "anywhere"] },
+  { op: "has:",         desc: "content type",      values: () => ["attachment", "drive", "document", "spreadsheet", "presentation", "youtube", "userlabels", "nouserlabels"] },
+  { op: "category:",    desc: "inbox tab",         values: () => ["primary", "social", "promotions", "updates", "forums"] },
+  { op: "filename:",    desc: "attachment name" },
+  { op: "newer_than:",  desc: "received within",   values: () => ["1d", "3d", "7d", "14d", "1m", "3m", "6m", "1y"] },
+  { op: "older_than:",  desc: "received before",   values: () => ["1d", "3d", "7d", "14d", "1m", "3m", "6m", "1y"] },
+  { op: "after:",       desc: "date YYYY/MM/DD" },
+  { op: "before:",      desc: "date YYYY/MM/DD" },
+  { op: "larger:",      desc: "size, e.g. 5M",     values: () => ["1M", "5M", "10M", "25M"] },
+  { op: "smaller:",     desc: "size, e.g. 5M",     values: () => ["1M", "5M", "10M", "25M"] },
+  { op: "deliveredto:", desc: "delivered-to addr", values: searchAcPeople },
+  { op: "list:",        desc: "mailing list" },
+];
+
+const SEARCH_AC = { items: [], active: -1, token: null };
+
+function searchTokenAt(value, caret) {
+  let start = caret;
+  while (start > 0 && !/\s/.test(value[start - 1])) start--;
+  let end = caret;
+  while (end < value.length && !/\s/.test(value[end])) end++;
+  return { start, end, typed: value.slice(start, caret) };
+}
+
+function searchAcBuild(typed) {
+  const t = typed.toLowerCase();
+  const colon = t.indexOf(":");
+  if (colon === -1) {
+    return SEARCH_OPS
+      .filter(o => o.op.startsWith(t))
+      .map(o => ({ insert: o.op, label: o.op, desc: o.desc, caretInside: true }));
+  }
+  const op = t.slice(0, colon + 1);
+  const val = t.slice(colon + 1);
+  const def = SEARCH_OPS.find(o => o.op === op);
+  if (!def || !def.values) return [];
+  if (op === "label:" && !SEARCH_AC_LABELS) searchAcLabels().then(() => searchAcUpdate());
+  return def.values()
+    .filter(v => v.toLowerCase().startsWith(val) && v.toLowerCase() !== val)
+    .map(v => ({ insert: op + v + " ", label: v, desc: def.desc }));
+}
+
+function searchAcRender() {
+  const box = $("inbox-search-ac");
+  const input = $("inbox-search-input");
+  box.replaceChildren();
+  const items = SEARCH_AC.items;
+  if (!items.length) {
+    box.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    return;
+  }
+  items.forEach((it, i) => {
+    box.appendChild(el("div", {
+      class: "search-ac-item" + (i === SEARCH_AC.active ? " active" : ""),
+      role: "option",
+      on: {
+        // mousedown, not click: click fires after the input's blur closed the
+        // box and the row was already gone.
+        mousedown: (ev) => { ev.preventDefault(); searchAcAccept(i); },
+      },
+    },
+      el("span", { class: "search-ac-op" }, it.label),
+      el("span", { class: "search-ac-desc" }, it.desc || ""),
+    ));
+  });
+  box.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+
+function searchAcUpdate() {
+  const input = $("inbox-search-input");
+  if (document.activeElement !== input) return;
+  const tok = searchTokenAt(input.value, input.selectionStart ?? input.value.length);
+  SEARCH_AC.token = tok;
+  SEARCH_AC.items = searchAcBuild(tok.typed).slice(0, 8);
+  SEARCH_AC.active = SEARCH_AC.items.length ? 0 : -1;
+  searchAcRender();
+}
+
+function searchAcClose() {
+  SEARCH_AC.items = [];
+  SEARCH_AC.active = -1;
+  searchAcRender();
+}
+
+function searchAcAccept(index) {
+  const input = $("inbox-search-input");
+  const it = SEARCH_AC.items[index];
+  const tok = SEARCH_AC.token;
+  if (!it || !tok) return;
+  const before = input.value.slice(0, tok.start);
+  const after  = input.value.slice(tok.end);
+  input.value = before + it.insert + after;
+  const caret = tok.start + it.insert.length;
+  input.focus();
+  input.setSelectionRange(caret, caret);
+  // Completing an operator immediately offers its values; completing a value
+  // (trailing space) moves on to a fresh operator list.
+  searchAcUpdate();
+}
+
+function searchAcKeydown(ev) {
+  if (!SEARCH_AC.items.length) return;
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    const n = SEARCH_AC.items.length;
+    SEARCH_AC.active = (SEARCH_AC.active + (ev.key === "ArrowDown" ? 1 : n - 1)) % n;
+    searchAcRender();
+  } else if (ev.key === "Tab" || (ev.key === "Enter" && SEARCH_AC.active >= 0)) {
+    ev.preventDefault();
+    searchAcAccept(SEARCH_AC.active);
+  } else if (ev.key === "Escape") {
+    searchAcClose();
+  }
+}
+
+{
+  const input = $("inbox-search-input");
+  if (input) {
+    input.addEventListener("input",  searchAcUpdate);
+    input.addEventListener("focus",  searchAcUpdate);
+    input.addEventListener("click",  searchAcUpdate);
+    input.addEventListener("keydown", searchAcKeydown);
+    input.addEventListener("blur",   () => setTimeout(searchAcClose, 120));
+  }
+}
 
 $("inbox-compose")?.addEventListener("click", () => openCompose());
 $("compose-cancel")?.addEventListener("click", closeCompose);
@@ -1407,6 +1953,7 @@ $("prod-refresh")?.addEventListener("click", () => reload());
 initSidebar();
 initSettings();
 handleConnectReturn();
+initLiveEvents();
 
 // ── main loop ─────────────────────────────────────────────────────────────
 

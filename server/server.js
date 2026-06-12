@@ -623,16 +623,30 @@ async function ensureCalendarContext() {
   await fetchCalendarContext();
 }
 
+// Whole-word matcher for the money-mail patterns: lookarounds on \p{L} so
+// "bill" doesn't light up "billing" while "Faktura #1042" still matches.
+function buildAlertRegex() {
+  const pats = (Array.isArray(cfg.gmailAlertPatterns) ? cfg.gmailAlertPatterns : [])
+    .map(p => String(p).trim()).filter(Boolean)
+    .map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!pats.length) return null;
+  try { return new RegExp(`(?<!\\p{L})(?:${pats.join("|")})(?!\\p{L})`, "iu"); }
+  catch { return null; }
+}
+
 function decorateInboxItems(items) {
   const teamSet = new Set((cfg.teamEmails || []).map(e => String(e).toLowerCase()));
+  const alertRe = buildAlertRegex();
   for (const m of items) {
     const email = extractEmail(m.from);
     m.from_email = email;
     m.is_team = !!(email && teamSet.has(email));
+    m.is_alert = !!(alertRe && alertRe.test(m.subject || ""));
     const ctx = email ? CAL_CONTEXT.map.get(email) : null;
     m.meeting = ctx || null;
   }
   items.sort((a, b) => {
+    if (a.is_alert !== b.is_alert) return a.is_alert ? -1 : 1;
     if (a.is_team !== b.is_team) return a.is_team ? -1 : 1;
     return (b.ts || "").localeCompare(a.ts || "");
   });
@@ -678,6 +692,48 @@ function gatherMemory() {
 // `claude` whose parent is not also `claude` is one user-facing session;
 // its descendants count toward that session's RSS. Worktree detection: walk
 // the session's cwd up looking for a .git pointing into a `worktrees/` gitdir.
+//
+// cwd (lsof) and git metadata (two rev-parse spawns) dominate the scan cost
+// and are stable for a session's lifetime, so both are cached by pid/cwd.
+// That keeps the SSE fast lane's repeat scans down to a single `ps`.
+const SESSION_CWD_CACHE = new Map();  // pid → { cwd, t }
+const SESSION_GIT_CACHE = new Map();  // cwd → { worktree, project, top, t }
+const SESSION_META_TTL_MS = 5 * 60_000;
+
+function cachedSessionCwd(pid) {
+  const hit = SESSION_CWD_CACHE.get(pid);
+  if (hit && Date.now() - hit.t < SESSION_META_TTL_MS) return hit.cwd;
+  const cwd = platform.processCwd(pid);
+  SESSION_CWD_CACHE.set(pid, { cwd, t: Date.now() });
+  return cwd;
+}
+
+function cachedSessionGit(cwd) {
+  const hit = SESSION_GIT_CACHE.get(cwd);
+  if (hit && Date.now() - hit.t < SESSION_META_TTL_MS) return hit;
+  let out = { worktree: false, project: null, top: null, t: Date.now() };
+  try {
+    const gitDir = execSync(`git -C "${cwd}" rev-parse --git-dir`, {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const top = execSync(`git -C "${cwd}" rev-parse --show-toplevel`, {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    out = { worktree: /[\\/]worktrees[\\/]/.test(gitDir), project: path.basename(top), top, t: Date.now() };
+  } catch {}
+  SESSION_GIT_CACHE.set(cwd, out);
+  return out;
+}
+
+function sweepSessionCaches(livePids) {
+  for (const pid of SESSION_CWD_CACHE.keys()) {
+    if (!livePids.has(pid)) SESSION_CWD_CACHE.delete(pid);
+  }
+  // cwd keys are unbounded across many short-lived sessions; a rare full
+  // reset is cheaper than tracking reference counts.
+  if (SESSION_GIT_CACHE.size > 200) SESSION_GIT_CACHE.clear();
+}
+
 function gatherSessions() {
   const procs = platform.processList();
   if (!procs.length) return [];
@@ -708,23 +764,16 @@ function gatherSessions() {
     const total_rss_kb = tree.reduce((s, p) => s + p.rss_kb, 0);
     const subagents = tree.filter((p) => p !== root && isClaude(p)).length;
 
-    const cwd = platform.processCwd(root.pid);
+    const cwd = cachedSessionCwd(root.pid);
     let worktree = false;
     let project = null;
     let rel = null;
     if (cwd) {
-      try {
-        const gitDir = execSync(`git -C "${cwd}" rev-parse --git-dir`, {
-          encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        worktree = /[\\/]worktrees[\\/]/.test(gitDir);
-        const top = execSync(`git -C "${cwd}" rev-parse --show-toplevel`, {
-          encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        project = path.basename(top);
-        // Repo-relative path: "pivi" at the root, "pivi/gateway" below it.
-        rel = project + cwd.slice(top.length);
-      } catch {}
+      const git = cachedSessionGit(cwd);
+      worktree = git.worktree;
+      project = git.project;
+      // Repo-relative path: "pivi" at the root, "pivi/gateway" below it.
+      if (git.top) rel = git.project + cwd.slice(git.top.length);
     }
 
     const home = process.env.HOME || process.env.USERPROFILE || "";
@@ -744,7 +793,88 @@ function gatherSessions() {
   });
 
   sessions.sort((a, b) => b.rss_kb - a.rss_kb);
+  sweepSessionCaches(new Set(roots.map(r => r.pid)));
   return sessions;
+}
+
+// ── live events (SSE) ───────────────────────────────────────────────────────
+// Push channel so claude-session / peer / tmux changes show up in seconds
+// instead of riding the dashboard's 30s /api/state poll. Zero-dep: plain
+// text/event-stream over the same localhost/tailnet listeners. The fast lane
+// only runs while at least one client is connected, scans sessions every
+// liveRefreshSec (cheap after the cwd/git caches above: one `ps`), and does
+// the heavier remote-presence + tmux sweep every other tick. Frames go out
+// only when the payload actually changed.
+
+const sseClients = new Set();
+let liveTimer = null;
+let liveTick  = 0;
+let liveBusy  = false;
+const liveLast = new Map();  // event name → last serialized payload
+
+function sseBroadcast(event, payload) {
+  const data = JSON.stringify(payload);
+  if (liveLast.get(event) === data) return;
+  liveLast.set(event, data);
+  const frame = `event: ${event}\ndata: ${data}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(frame); } catch { sseClients.delete(res); }
+  }
+}
+
+async function liveTickFn() {
+  if (!sseClients.size || liveBusy) return;
+  liveBusy = true;
+  liveTick++;
+  try {
+    sseBroadcast("sessions", { sessions: gatherSessions(), memory: gatherMemory() });
+    if (liveTick % 2 === 0) {
+      const [remote, tmux] = await Promise.all([gatherRemote(), tmuxListWindows()]);
+      sseBroadcast("remote", remote);
+      sseBroadcast("tmux", tmux);
+    }
+    // Comment frame as a keepalive so idle streams aren't reaped by proxies
+    // and dead sockets surface as write errors.
+    if (liveTick % 8 === 0) {
+      for (const res of sseClients) {
+        try { res.write(": keepalive\n\n"); } catch { sseClients.delete(res); }
+      }
+    }
+  } catch { /* next tick retries */ }
+  finally { liveBusy = false; }
+}
+
+function startLiveLane() {
+  if (liveTimer) return;
+  liveTick = 0;
+  const sec = Math.max(1, Number(cfg.liveRefreshSec) || 3);
+  liveTimer = setInterval(liveTickFn, sec * 1000);
+  liveTickFn();
+}
+
+function stopLiveLaneIfIdle() {
+  if (!sseClients.size && liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    liveLast.clear();
+  }
+}
+
+function handleEvents(req, res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "access-control-allow-origin": "*",
+  });
+  res.write("retry: 3000\n\n");
+  sseClients.add(res);
+  // New subscriber gets the current picture immediately, not on next change.
+  for (const [event, data] of liveLast) {
+    try { res.write(`event: ${event}\ndata: ${data}\n\n`); } catch {}
+  }
+  startLiveLane();
+  req.on("close", () => { sseClients.delete(res); stopLiveLaneIfIdle(); });
 }
 
 // ── PROD column (pivi /statusz) ─────────────────────────────────────────────
@@ -772,14 +902,29 @@ function normalizeStatusz(parsed) {
   if (parsed.status || parsed.last_run) {
     const lr = parsed.last_run || {};
     const running = parsed.status === "running";
-    return {
-      generated_at: parsed.generated_at || parsed.finished_at || null,
-      jobs: [{
-        job_id: "pipeline",
-        status: running ? "running" : (lr.status || parsed.status || "unknown"),
-        last_run_at: lr.finished_at || parsed.finished_at || lr.started_at || parsed.started_at || null,
-      }],
+    const job = {
+      job_id: "pipeline",
+      status: running ? "running" : (lr.status || parsed.status || "unknown"),
+      last_run_at: lr.finished_at || parsed.finished_at || lr.started_at || parsed.started_at || null,
     };
+    if (running && Number.isFinite(parsed.step_number) && Number.isFinite(parsed.total_steps)) {
+      job.progress = { step: parsed.current_step || "", n: parsed.step_number, total: parsed.total_steps };
+    }
+    // Substeps come keyed by step number, each a list of { name, status }.
+    // Failures are worth a chip on the card even while the run is green-path.
+    if (parsed.substeps && typeof parsed.substeps === "object") {
+      const failed = [];
+      for (const list of Object.values(parsed.substeps)) {
+        if (!Array.isArray(list)) continue;
+        for (const s of list) if (s && s.status === "failed" && s.name) failed.push(s.name);
+      }
+      if (failed.length) job.substeps_failed = failed;
+    }
+    const lastDone = Array.isArray(parsed.runs)
+      ? parsed.runs.find(r => r && r.status !== "running" && r.duration_ms != null)
+      : null;
+    if (lastDone) job.last_duration_s = Math.round(lastDone.duration_ms / 1000);
+    return { generated_at: parsed.generated_at || parsed.finished_at || null, jobs: [job] };
   }
   return { generated_at: parsed.generated_at || null, jobs: [] };
 }
@@ -803,6 +948,11 @@ function fetchStatuszOnce(target) {
       r.on("data", c => chunks.push(c));
       r.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
+        if (r.statusCode === 401 || r.statusCode === 403) {
+          // Auth-gated statusz (gateway requires INTERNAL_API_KEY since pivi
+          // PR #996 was closed unmerged). Not an outage — render as locked.
+          return resolve({ ok: false, auth_required: true, error: `auth required (http ${r.statusCode})`, status_code: r.statusCode });
+        }
         if (r.statusCode < 200 || r.statusCode >= 300) {
           return resolve({ ok: false, error: `http ${r.statusCode}`, status_code: r.statusCode });
         }
@@ -836,12 +986,365 @@ async function fetchStatuszCached(target) {
 
 async function gatherProd() {
   const targets = Array.isArray(cfg.prodTargets) ? cfg.prodTargets : [];
-  const results = await Promise.all(targets.map(async t => ({
-    name: t.name || t.url,
-    url:  t.url,
-    ...(await fetchStatuszCached(t)),
-  })));
-  return { targets: results };
+  const [results, fleet, deploys] = await Promise.all([
+    Promise.all(targets.map(async t => ({
+      name: t.name || t.url,
+      url:  t.url,
+      ...(await fetchStatuszCached(t)),
+    }))),
+    gatherFleet(),
+    gatherDeploys(),
+  ]);
+  return { targets: results, health: snapshotHealth(), deploys, fleet };
+}
+
+// ── PROD fleet (pivi gateway /api/v2/metrics) ──────────────────────────────
+// Machine heartbeats pushed by every prod service instance to the gateway's
+// in-memory metrics store. Service-token gated: glance renders the section
+// locked until the user puts the Bearer token into prodFleet.headers. Same
+// TTL + in-flight pattern as the statusz fetcher.
+
+const fleetCache = { fetched_at: 0, result: null, inflight: null };
+
+function fetchFleetOnce(target) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(target.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...target.headers },
+      timeout:  6000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        // 503 is the gateway's own "metrics disabled, no SERVICE_TOKEN
+        // configured" answer; render it locked rather than as an outage.
+        if (r.statusCode === 401 || r.statusCode === 403 || r.statusCode === 503) {
+          return resolve({ ok: false, auth_required: true, error: `auth required (http ${r.statusCode})`, status_code: r.statusCode });
+        }
+        if (r.statusCode < 200 || r.statusCode >= 300) {
+          return resolve({ ok: false, error: `http ${r.statusCode}`, status_code: r.statusCode });
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); }
+        catch (e) { return resolve({ ok: false, error: "not json: " + e.message }); }
+        const machines = (Array.isArray(parsed.machines) ? parsed.machines : []).map(m => ({
+          machine_id:     m.machine_id,
+          hostname:       m.hostname || m.machine_id,
+          service:        m.service || "unknown",
+          status:         m.status || "unknown",
+          stale:          !!m.stale,
+          uptime_s:       Number.isFinite(m.uptime_seconds) ? Math.round(m.uptime_seconds) : null,
+          current_step:   m.current_step || null,
+          last_job:       m.last_job || null,
+          last_heartbeat: m.last_heartbeat || null,
+        }));
+        resolve({ ok: true, machines, total: parsed.total ?? machines.length, stale_count: parsed.stale_count ?? 0 });
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+    req.end();
+  });
+}
+
+function gatherFleet() {
+  const target = cfg.prodFleet;
+  if (!target || !target.url) return Promise.resolve(null);
+  const ttl = Math.max(10, Number(cfg.prodRefreshSec) || 30) * 1000;
+  if (fleetCache.result && (Date.now() - fleetCache.fetched_at) < ttl) return Promise.resolve(fleetCache.result);
+  if (!fleetCache.inflight) {
+    fleetCache.inflight = fetchFleetOnce(target).then(result => {
+      fleetCache.result = result;
+      fleetCache.fetched_at = Date.now();
+      fleetCache.inflight = null;
+      return result;
+    });
+  }
+  return fleetCache.inflight;
+}
+
+// ── PROD health / uptime tracker ────────────────────────────────────────────
+// Background pollers (one tick for all targets) so up/down transitions are
+// caught even when no dashboard tab is open. Latency samples live in memory
+// (24h window); up/down transitions are the durable part and are persisted to
+// a small JSON state file so incident history survives a restart. A state
+// file is not a database: same pattern as the calendar/gmail caches.
+
+const HEALTH_STATE_FILE = path.join(configMod.CONFIG_DIR, "prod-history.json");
+const HEALTH_WINDOW_MS  = 24 * 3600_000;
+const HEALTH_MAX_TRANSITIONS = 100;
+
+const healthState = new Map();  // name → { samples: [{t, ok, ms}], transitions: [{t, up}], last }
+let healthTimer = null;
+
+function loadHealthState() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(HEALTH_STATE_FILE, "utf8"));
+    for (const [name, transitions] of Object.entries(saved.transitions || {})) {
+      if (Array.isArray(transitions)) healthState.set(name, { samples: [], transitions, last: null });
+    }
+  } catch { /* first run or unreadable — start clean */ }
+}
+
+function persistHealthState() {
+  const transitions = {};
+  for (const [name, st] of healthState) transitions[name] = st.transitions;
+  try {
+    fs.mkdirSync(configMod.CONFIG_DIR, { recursive: true });
+    const tmp = HEALTH_STATE_FILE + ".tmp-" + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify({ transitions }) + "\n", { mode: 0o600 });
+    fs.renameSync(tmp, HEALTH_STATE_FILE);
+  } catch { /* best effort */ }
+}
+
+function pingHealthOnce(target) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(target.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const t0 = Date.now();
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...target.headers },
+      timeout:  8000,
+    }, r => {
+      const chunks = [];
+      let size = 0;
+      r.on("data", c => { size += c.length; if (size <= 65536) chunks.push(c); });
+      r.on("end", () => {
+        const out = {
+          // A redirect still means the edge answered; landing/app live behind
+          // hosts that 30x bare domains to www.
+          ok: r.statusCode >= 200 && r.statusCode < 400,
+          status_code: r.statusCode,
+          latency_ms: Date.now() - t0,
+        };
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (typeof parsed.version === "string")     out.version = parsed.version;
+          if (typeof parsed.environment === "string") out.environment = parsed.environment;
+          if (typeof parsed.pipeline_env === "string") out.environment = parsed.pipeline_env;
+          if (Number.isFinite(parsed.uptime_seconds)) out.service_uptime_s = Math.round(parsed.uptime_seconds);
+        } catch { /* non-JSON body — liveness only */ }
+        resolve(out);
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message, latency_ms: Date.now() - t0 }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout", latency_ms: Date.now() - t0 }); });
+    req.end();
+  });
+}
+
+async function tickHealth() {
+  const targets = Array.isArray(cfg.prodHealth) ? cfg.prodHealth : [];
+  await Promise.all(targets.map(async (t) => {
+    const name = t.name || t.url;
+    const r = await pingHealthOnce(t);
+    let st = healthState.get(name);
+    if (!st) { st = { samples: [], transitions: [], last: null }; healthState.set(name, st); }
+    const now = Date.now();
+    st.samples.push({ t: now, ok: r.ok, ms: r.latency_ms });
+    const cutoff = now - HEALTH_WINDOW_MS;
+    while (st.samples.length && st.samples[0].t < cutoff) st.samples.shift();
+
+    const prevUp = st.last ? st.last.ok : null;
+    st.last = { ...r, url: t.url, checked_at: new Date(now).toISOString() };
+    if (prevUp !== null && prevUp !== r.ok) {
+      st.transitions.push({ t: now, up: r.ok });
+      if (st.transitions.length > HEALTH_MAX_TRANSITIONS) st.transitions.shift();
+      persistHealthState();
+    }
+  }));
+}
+
+function snapshotHealth() {
+  const targets = Array.isArray(cfg.prodHealth) ? cfg.prodHealth : [];
+  return targets.map((t) => {
+    const name = t.name || t.url;
+    const st = healthState.get(name);
+    if (!st || !st.last) return { name, url: t.url, ok: null, pending: true };
+
+    const okCount = st.samples.filter(s => s.ok).length;
+    const uptimePct = st.samples.length ? (okCount / st.samples.length) * 100 : null;
+    const lastFlip = st.transitions.length ? st.transitions[st.transitions.length - 1] : null;
+
+    // Last incident: most recent down→up pair (or a still-open down).
+    let incident = null;
+    for (let i = st.transitions.length - 1; i >= 0; i--) {
+      const tr = st.transitions[i];
+      if (!tr.up) {
+        const end = st.transitions[i + 1] && st.transitions[i + 1].up ? st.transitions[i + 1].t : null;
+        incident = {
+          started_at: new Date(tr.t).toISOString(),
+          ended_at:   end ? new Date(end).toISOString() : null,
+          duration_s: Math.round(((end || Date.now()) - tr.t) / 1000),
+        };
+        break;
+      }
+    }
+
+    const latencies = st.samples.slice(-32).map(s => (Number.isFinite(s.ms) ? s.ms : 0));
+    return {
+      name,
+      url: t.url,
+      ...st.last,
+      uptime_pct: uptimePct == null ? null : Math.round(uptimePct * 100) / 100,
+      window_s: st.samples.length ? Math.round((Date.now() - st.samples[0].t) / 1000) : 0,
+      since: lastFlip ? new Date(lastFlip.t).toISOString() : null,
+      last_incident: incident,
+      spark_latency: sparkline(latencies, Math.max(200, ...latencies)),
+    };
+  });
+}
+
+function startHealthPoller() {
+  if (healthTimer) clearInterval(healthTimer);
+  const sec = Math.max(15, Number(cfg.prodHealthIntervalSec) || 60);
+  tickHealth();
+  healthTimer = setInterval(tickHealth, sec * 1000);
+}
+
+loadHealthState();
+startHealthPoller();
+
+// ── PROD deployments (gh CLI) ───────────────────────────────────────────────
+// Deployed version + branch, in-flight deploy progress, and an ETA derived
+// from the median duration of recent successful runs. Uses the local `gh`
+// binary and its auth; glance never stores a GitHub token. Cached with an
+// in-flight guard like the statusz fetcher so dashboard clients can't fan out
+// into API-rate-limit territory.
+
+const deployCache = { fetched_at: 0, result: null, inflight: null };
+
+function runGh(args, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const out = [], err = [];
+    const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, timeoutMs);
+    child.stdout.on("data", c => out.push(c));
+    child.stderr.on("data", c => err.push(c));
+    child.on("close", code => {
+      clearTimeout(killer);
+      resolve({ ok: code === 0, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") });
+    });
+    child.on("error", e => { clearTimeout(killer); resolve({ ok: false, stdout: "", stderr: e.message }); });
+  });
+}
+
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+
+function medianDurationS(runs) {
+  const ds = runs
+    .filter(r => r.status === "completed" && r.conclusion === "success" && r.startedAt && r.updatedAt)
+    .map(r => (Date.parse(r.updatedAt) - Date.parse(r.startedAt)) / 1000)
+    .filter(d => Number.isFinite(d) && d > 0)
+    .sort((a, b) => a - b);
+  if (!ds.length) return null;
+  return Math.round(ds[Math.floor(ds.length / 2)]);
+}
+
+async function fetchWorkflowDeploy(t) {
+  const fields = "headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,url,displayTitle";
+  const r = await runGh(["run", "list", "--repo", t.repo, "--workflow", t.workflow, "--limit", "6", "--json", fields]);
+  if (!r.ok) return { ok: false, error: (r.stderr || "gh failed").trim().slice(0, 200) };
+  let runs;
+  try { runs = JSON.parse(r.stdout); } catch (e) { return { ok: false, error: "bad gh output: " + e.message }; }
+  if (!Array.isArray(runs) || !runs.length) return { ok: false, error: "no runs" };
+  const latest = runs[0];
+  const startedAt = latest.startedAt || latest.createdAt;
+  const out = {
+    ok: true,
+    branch: latest.headBranch,
+    sha: latest.headSha,
+    title: latest.displayTitle,
+    run_url: latest.url,
+    started_at: startedAt,
+  };
+  if (latest.status !== "completed") {
+    const elapsed = Math.round((Date.now() - Date.parse(startedAt)) / 1000);
+    const typical = medianDurationS(runs.slice(1));
+    out.status = "deploying";
+    out.elapsed_s = Number.isFinite(elapsed) ? elapsed : null;
+    out.typical_s = typical;
+    out.eta_s = typical != null && out.elapsed_s != null ? Math.max(0, typical - out.elapsed_s) : null;
+  } else {
+    out.status = latest.conclusion || "unknown";
+    out.finished_at = latest.updatedAt;
+    const d = (Date.parse(latest.updatedAt) - Date.parse(startedAt)) / 1000;
+    if (Number.isFinite(d) && d > 0) out.duration_s = Math.round(d);
+  }
+  return out;
+}
+
+async function fetchDeploymentDeploy(t) {
+  const env = t.environment || "Production";
+  const r = await runGh(["api", `repos/${t.repo}/deployments?environment=${encodeURIComponent(env)}&per_page=1`]);
+  if (!r.ok) return { ok: false, error: (r.stderr || "gh failed").trim().slice(0, 200) };
+  let deps;
+  try { deps = JSON.parse(r.stdout); } catch (e) { return { ok: false, error: "bad gh output: " + e.message }; }
+  if (!Array.isArray(deps) || !deps.length) return { ok: false, error: "no deployments" };
+  const d = deps[0];
+  const s = await runGh(["api", `repos/${t.repo}/deployments/${d.id}/statuses?per_page=1`]);
+  let state = "unknown", stateAt = null, targetUrl = null;
+  if (s.ok) {
+    try {
+      const sts = JSON.parse(s.stdout);
+      if (Array.isArray(sts) && sts.length) {
+        state = sts[0].state || "unknown";
+        stateAt = sts[0].created_at || null;
+        targetUrl = sts[0].environment_url || sts[0].target_url || null;
+      }
+    } catch { /* keep unknown */ }
+  }
+  const statusMap = { success: "success", failure: "failure", error: "failure", in_progress: "deploying", queued: "deploying", pending: "deploying", inactive: "inactive" };
+  return {
+    ok: true,
+    // Vercel reports ref as the bare commit sha; showing it as a "branch"
+    // would render a 40-char hex string where a name belongs.
+    branch: /^[0-9a-f]{40}$/i.test(d.ref || "") ? null : d.ref,
+    sha: d.sha,
+    status: statusMap[state] || state,
+    started_at: d.created_at,
+    finished_at: stateAt,
+    run_url: targetUrl || `https://github.com/${t.repo}/deployments`,
+  };
+}
+
+async function fetchDeploysOnce() {
+  const targets = Array.isArray(cfg.deployTargets) ? cfg.deployTargets : [];
+  return Promise.all(targets.map(async (t) => {
+    const base = { name: t.name || t.repo, repo: t.repo, kind: t.kind };
+    if (!t.repo || !REPO_RE.test(t.repo)) return { ...base, ok: false, error: "bad repo" };
+    const r = t.kind === "deployment" ? await fetchDeploymentDeploy(t) : await fetchWorkflowDeploy(t);
+    if (r.sha) r.sha7 = String(r.sha).slice(0, 7);
+    return { ...base, ...r };
+  }));
+}
+
+function gatherDeploys() {
+  const ttl = Math.max(30, Number(cfg.deployRefreshSec) || 120) * 1000;
+  if (deployCache.result && (Date.now() - deployCache.fetched_at) < ttl) return Promise.resolve(deployCache.result);
+  if (!deployCache.inflight) {
+    deployCache.inflight = fetchDeploysOnce().then(list => {
+      deployCache.result = { targets: list, fetched_at: new Date().toISOString() };
+      deployCache.fetched_at = Date.now();
+      deployCache.inflight = null;
+      return deployCache.result;
+    });
+  }
+  return deployCache.inflight;
 }
 
 async function gatherState() {
@@ -1031,6 +1534,11 @@ if (Array.isArray(cfg.customWidgets)) applyCustomConfig(cfg.customWidgets);
 async function actionRefresh() {
   try { fs.unlinkSync(CAL_CACHE); } catch {}
   try { fs.unlinkSync(GMAIL_CACHE); } catch {}
+  prodCache.clear();
+  deployCache.fetched_at = 0;
+  deployCache.result = null;
+  fleetCache.fetched_at = 0;
+  fleetCache.result = null;
   return gatherState();
 }
 
@@ -1170,6 +1678,55 @@ async function actionInboxSend(body) {
   if (!r.ok) return { ok: false, error: r.stderr.trim() || "send failed", statusCode: 500 };
   try { return { ok: true, ...JSON.parse(r.stdout) }; }
   catch { return { ok: true }; }
+}
+
+// Labels change rarely; cache so opening the move-to dropdown doesn't spawn
+// a gmail.js process every time.
+const labelsCache = { fetched_at: 0, labels: null };
+
+async function actionInboxLabels() {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (labelsCache.labels && (Date.now() - labelsCache.fetched_at) < 5 * 60_000) {
+    return { ok: true, labels: labelsCache.labels };
+  }
+  const r = await runGmail(["labels"]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "labels failed", statusCode: 500 };
+  const labels = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const idx = line.indexOf("\t");
+    if (idx < 1) continue;
+    labels.push({ id: line.slice(0, idx), name: line.slice(idx + 1) });
+  }
+  labels.sort((a, b) => a.name.localeCompare(b.name));
+  labelsCache.labels = labels;
+  labelsCache.fetched_at = Date.now();
+  return { ok: true, labels };
+}
+
+const GMAIL_LABEL_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const BULK_ACTIONS   = new Set(["read", "archive", "trash", "move"]);
+
+async function actionInboxBulk(body) {
+  if (!cfg.gmailBin) return { ok: false, error: "gmailBin not configured", statusCode: 400 };
+  if (!body || !Array.isArray(body.ids)) return { ok: false, error: "expected { ids: [...] }", statusCode: 400 };
+  const ids = body.ids.map(String);
+  if (!ids.length || ids.length > 100) return { ok: false, error: "1..100 ids required", statusCode: 400 };
+  for (const id of ids) {
+    if (!GMAIL_ID_RE.test(id)) return { ok: false, error: `invalid id: ${id}`, statusCode: 400 };
+  }
+  const action = String(body.action || "");
+  if (!BULK_ACTIONS.has(action)) return { ok: false, error: "action must be read|archive|trash|move", statusCode: 400 };
+  let actionArg = action;
+  if (action === "move") {
+    const label = String(body.label_id || "");
+    if (!GMAIL_LABEL_RE.test(label)) return { ok: false, error: "label_id required for move", statusCode: 400 };
+    actionArg = `move:${label}`;
+  }
+  const r = await runGmail(["batch", actionArg, ids.join(",")]);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || "bulk failed", statusCode: 500 };
+  try { fs.unlinkSync(GMAIL_CACHE); } catch {}
+  return { ok: true, count: ids.length };
 }
 
 // ── pivi org admin proxy ─────────────────────────────────────────────────────
@@ -1382,6 +1939,9 @@ const requestHandler = async (req, res) => {
     if (req.method === "GET" && req.url === "/api/state") {
       return send(res, 200, await gatherState());
     }
+    if (req.method === "GET" && req.url === "/api/events") {
+      return handleEvents(req, res);
+    }
     if (req.method === "POST" && req.url === "/api/refresh") {
       return send(res, 200, await actionRefresh());
     }
@@ -1435,6 +1995,15 @@ const requestHandler = async (req, res) => {
         team_emails: Array.isArray(cfg.teamEmails) ? cfg.teamEmails : [],
         has_summarizer: Array.isArray(cfg.gmailSummarizerCmd) && cfg.gmailSummarizerCmd.length > 0,
       });
+    }
+    if (req.method === "GET" && req.url === "/api/inbox/labels") {
+      const r = await actionInboxLabels();
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
+    }
+    if (req.method === "POST" && req.url === "/api/inbox/bulk") {
+      const body = await readBody(req);
+      const r = await actionInboxBulk(body);
+      return send(res, r.ok ? 200 : (r.statusCode || 400), r);
     }
     if (req.method === "GET" && req.url.startsWith("/api/inbox/search")) {
       const u = new URL(req.url, "http://127.0.0.1");
@@ -1552,6 +2121,10 @@ const servers = BIND_HOSTS.map((host) => {
 // Graceful shutdown so the extension can stop us cleanly.
 function shutdown() {
   for (const id of [...customTimers.keys()]) stopCustomPoller(id);
+  if (healthTimer) clearInterval(healthTimer);
+  if (liveTimer) clearInterval(liveTimer);
+  for (const res of sseClients) { try { res.end(); } catch {} }
+  sseClients.clear();
   let pending = servers.length;
   for (const s of servers) s.close(() => { if (--pending === 0) process.exit(0); });
   setTimeout(() => process.exit(1), 2000).unref();
