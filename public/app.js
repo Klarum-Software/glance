@@ -195,20 +195,144 @@ function renderRemote(r) {
 
 const PROD_STATUS_CLASS = { succeeded: "ok", failed: "bad", running: "warn", skipped: "skip" };
 
+function fmtDur(s) {
+  if (!Number.isFinite(s) || s < 0) return "—";
+  if (s < 60)    return `${Math.round(s)}s`;
+  if (s < 3600)  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 function renderProdJob(job) {
   const variant = PROD_STATUS_CLASS[job.status] || "skip";
+  const badges = [el("span", { class: "tcard-badge" }, "ran " + fmtAgo(job.last_run_at))];
+  if (job.last_duration_s != null) badges.push(el("span", { class: "tcard-badge mute" }, "took " + fmtDur(job.last_duration_s)));
+  for (const name of job.substeps_failed || []) {
+    badges.push(el("span", { class: "tcard-badge bad" }, name + " failed"));
+  }
+  const bodyKids = [
+    el("div", { class: "tcard-head" },
+      el("span", { class: "tcard-title" }, job.job_id || "—"),
+      el("span", { class: "tcard-value" }, job.status || "—"),
+    ),
+  ];
+  if (job.progress && job.progress.total) {
+    bodyKids.push(el("div", { class: "prod-progress" },
+      el("div", { class: "prod-progress-track" },
+        el("div", { class: "prod-progress-fill", style: `width:${Math.min(100, job.progress.n / job.progress.total * 100).toFixed(1)}%` })),
+      el("span", { class: "prod-progress-label" }, `step ${job.progress.n}/${job.progress.total} · ${job.progress.step}`),
+    ));
+  }
+  bodyKids.push(el("div", { class: "tcard-badges" }, ...badges));
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" }, ...bodyKids),
+  );
+}
+
+function renderHealthCard(h) {
+  if (h.pending) {
+    return el("div", { class: "tcard tcard-prod skip" },
+      el("div", { class: "tcard-accent" }),
+      el("div", { class: "tcard-body" },
+        el("div", { class: "tcard-head" },
+          el("span", { class: "tcard-title" }, h.name),
+          el("span", { class: "tcard-value" }, "checking…"))));
+  }
+  const variant = h.ok ? "ok" : "bad";
+  const badges = [];
+  if (h.version)     badges.push(el("span", { class: "tcard-badge info" }, "v" + h.version));
+  if (h.environment) badges.push(el("span", { class: "tcard-badge mute" }, h.environment));
+  if (Number.isFinite(h.latency_ms)) badges.push(el("span", { class: "tcard-badge" }, h.latency_ms + " ms"));
+  if (h.uptime_pct != null) {
+    badges.push(el("span", { class: "tcard-badge" + (h.uptime_pct < 100 ? " warn" : "") },
+      `${h.uptime_pct}% over ${fmtUptime(h.window_s)}`));
+  }
+  if (h.last_incident) {
+    const inc = h.last_incident;
+    badges.push(el("span", { class: "tcard-badge warn", title: inc.started_at },
+      `last incident ${fmtAgo(inc.started_at)} · ${fmtDur(inc.duration_s)}`));
+  }
+  const statusTxt = h.ok
+    ? "up" + (h.since ? " · " + fmtAgo(h.since).replace(" ago", "") : "")
+    : (h.error || `http ${h.status_code}`);
   return el("div", { class: "tcard tcard-prod " + variant },
     el("div", { class: "tcard-accent" }),
     el("div", { class: "tcard-body" },
       el("div", { class: "tcard-head" },
-        el("span", { class: "tcard-title" }, job.job_id || "—"),
-        el("span", { class: "tcard-value" }, job.status || "—"),
+        el("span", { class: "tcard-title", title: h.url }, h.name),
+        h.spark_latency ? el("span", { class: "prod-spark", title: "latency, last 32 checks" }, h.spark_latency) : null,
+        el("span", { class: "tcard-value" + (h.ok ? "" : " prod-down") }, statusTxt),
       ),
-      el("div", { class: "tcard-badges" },
-        el("span", { class: "tcard-badge" }, "ran " + fmtAgo(job.last_run_at)),
-      ),
+      el("div", { class: "tcard-badges" }, ...badges),
     ),
   );
+}
+
+function renderFleetCard(m) {
+  const healthy = m.status === "healthy" && !m.stale;
+  const variant = m.stale ? "warn" : (m.status === "healthy" ? "ok" : "bad");
+  const badges = [el("span", { class: "tcard-badge mute" }, m.service)];
+  if (m.uptime_s != null) badges.push(el("span", { class: "tcard-badge" }, "up " + fmtUptime(m.uptime_s)));
+  if (m.last_heartbeat)   badges.push(el("span", { class: "tcard-badge" + (m.stale ? " warn" : "") }, "hb " + fmtAgo(m.last_heartbeat)));
+  if (m.current_step)     badges.push(el("span", { class: "tcard-badge info" }, m.current_step));
+  if (m.last_job && m.last_job.status) {
+    badges.push(el("span", { class: "tcard-badge" + (m.last_job.status === "failed" ? " bad" : "") },
+      "job " + m.last_job.status));
+  }
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", { class: "tcard-head" },
+        el("span", { class: "tcard-title", title: m.machine_id }, m.hostname),
+        el("span", { class: "tcard-value" + (healthy ? "" : " prod-down") },
+          m.stale ? "stale" : m.status),
+      ),
+      el("div", { class: "tcard-badges" }, ...badges),
+    ),
+  );
+}
+
+const DEPLOY_STATUS_CLASS = { success: "ok", failure: "bad", deploying: "warn", cancelled: "skip", inactive: "skip" };
+
+function renderDeployCard(d) {
+  if (!d.ok) {
+    return el("div", { class: "tcard tcard-prod skip" },
+      el("div", { class: "tcard-accent" }),
+      el("div", { class: "tcard-body" },
+        el("div", { class: "tcard-head" },
+          el("span", { class: "tcard-title" }, d.name),
+          el("span", { class: "tcard-value" }, d.error || "unavailable"))));
+  }
+  const variant = DEPLOY_STATUS_CLASS[d.status] || "skip";
+  const badges = [];
+  const ref = d.branch ? d.branch + (d.sha7 ? "@" + d.sha7 : "") : d.sha7;
+  if (ref) badges.push(el("span", { class: "tcard-badge mono" }, ref));
+  if (d.status === "deploying") {
+    badges.push(el("span", { class: "tcard-badge warn" }, "elapsed " + fmtDur(d.elapsed_s)));
+    if (d.eta_s != null) badges.push(el("span", { class: "tcard-badge info" }, "~" + fmtDur(d.eta_s) + " left"));
+  } else {
+    if (d.finished_at)       badges.push(el("span", { class: "tcard-badge" }, fmtAgo(d.finished_at)));
+    if (d.duration_s != null) badges.push(el("span", { class: "tcard-badge mute" }, "took " + fmtDur(d.duration_s)));
+  }
+  const title = d.run_url
+    ? el("a", { class: "tcard-title prod-link", href: d.run_url, target: "_blank", rel: "noopener", title: d.title || d.run_url }, d.name)
+    : el("span", { class: "tcard-title" }, d.name);
+  return el("div", { class: "tcard tcard-prod " + variant },
+    el("div", { class: "tcard-accent" }),
+    el("div", { class: "tcard-body" },
+      el("div", { class: "tcard-head" },
+        title,
+        el("span", { class: "tcard-value" }, d.status === "deploying" ? "deploying…" : d.status),
+      ),
+      el("div", { class: "tcard-badges" }, ...badges),
+    ),
+  );
+}
+
+function prodSubhead(label, metaTxt, metaClass) {
+  const sub = el("div", { class: "mail-subhead" }, label);
+  if (metaTxt) sub.appendChild(el("span", { class: "col-meta" + (metaClass ? " " + metaClass : "") }, "· " + metaTxt));
+  return sub;
 }
 
 function renderProd(prod) {
@@ -217,22 +341,62 @@ function renderProd(prod) {
   body.replaceChildren();
 
   const targets = prod?.targets || [];
-  if (!targets.length) {
+  const health  = prod?.health || [];
+  const deploys = prod?.deploys?.targets || [];
+
+  if (!targets.length && !health.length && !deploys.length) {
     meta.textContent = "· no targets";
     body.appendChild(el("div", { class: "remote-empty" },
       el("div", { class: "remote-empty-title" }, "no prod targets configured"),
       el("div", { class: "remote-empty-hint" },
-        el("span", {}, "Set ", el("code", {}, "prodTargets"), " in config.json."),
+        el("span", {}, "Set ", el("code", {}, "prodHealth"), ", ", el("code", {}, "deployTargets"),
+          " or ", el("code", {}, "prodTargets"), " in config.json."),
       ),
     ));
     return;
   }
 
-  let failing = 0;
+  let down = 0, failing = 0;
+
+  if (health.length) {
+    const up = health.filter(h => h.ok).length;
+    down = health.filter(h => h.ok === false).length;
+    body.appendChild(prodSubhead("SERVICES", `${up}/${health.length} up`, down ? "prod-down" : ""));
+    for (const h of health) body.appendChild(renderHealthCard(h));
+  }
+
+  const fleet = prod?.fleet;
+  if (fleet) {
+    if (fleet.ok) {
+      const bad = fleet.machines.filter(m => m.stale || m.status !== "healthy").length;
+      body.appendChild(prodSubhead("FLEET", `${fleet.total - bad}/${fleet.total} healthy`, bad ? "prod-down" : ""));
+      if (!fleet.machines.length) body.appendChild(el("div", { class: "prod-empty" }, "no heartbeats yet"));
+      for (const m of fleet.machines) {
+        if (m.stale || m.status !== "healthy") failing++;
+        body.appendChild(renderFleetCard(m));
+      }
+    } else if (fleet.auth_required) {
+      body.appendChild(prodSubhead("FLEET", "locked (add the SERVICE_TOKEN to prodFleet.headers)"));
+    } else {
+      body.appendChild(prodSubhead("FLEET", fleet.error || "unreachable", "prod-down"));
+    }
+  }
+
+  if (deploys.length) {
+    const live = deploys.filter(d => d.ok && d.status === "deploying").length;
+    body.appendChild(prodSubhead("DEPLOYMENTS", live ? `${live} in flight` : null));
+    for (const d of deploys) {
+      if (d.ok && d.status === "failure") failing++;
+      body.appendChild(renderDeployCard(d));
+    }
+  }
+
   for (const t of targets) {
-    const sub = el("div", { class: "mail-subhead" }, t.name);
+    const sub = el("div", { class: "mail-subhead" }, "JOBS · " + t.name.toUpperCase());
     if (t.ok) {
       sub.appendChild(el("span", { class: "col-meta" }, "· " + fmtAgo(t.generated_at)));
+    } else if (t.auth_required) {
+      sub.appendChild(el("span", { class: "col-meta", title: "add an INTERNAL_API_KEY header to this prodTargets entry" }, "· locked (auth required)"));
     } else {
       sub.appendChild(el("span", { class: "col-meta prod-down" }, "· " + (t.error || "unreachable")));
     }
@@ -250,10 +414,10 @@ function renderProd(prod) {
     }
   }
 
-  const reachable = targets.filter(t => t.ok).length;
-  meta.textContent = failing
-    ? `· ${failing} failing`
-    : `· ${reachable}/${targets.length} up`;
+  meta.textContent = down
+    ? `· ${down} DOWN`
+    : failing ? `· ${failing} failing`
+    : "· all up";
 }
 
 function fmtBytes(kb) {
@@ -766,8 +930,12 @@ function updateNavBadges(state) {
   document.querySelector('.nav-item[data-panel="mail"]')?.classList.toggle("has-alert", unread > 0);
 
   const prodTargets = state.prod?.targets || [];
-  const prodFailing = prodTargets.reduce(
-    (n, t) => n + (t.ok ? (t.jobs || []).filter(j => j.status === "failed").length : 1), 0);
+  const prodFailing =
+    prodTargets.reduce(
+      (n, t) => n + (t.ok ? (t.jobs || []).filter(j => j.status === "failed").length : (t.auth_required ? 0 : 1)), 0)
+    + (state.prod?.health || []).filter(h => h.ok === false).length
+    + (state.prod?.deploys?.targets || []).filter(d => d.ok && d.status === "failure").length
+    + (state.prod?.fleet?.ok ? state.prod.fleet.machines.filter(m => m.stale || m.status !== "healthy").length : 0);
   $("nav-badge-prod").textContent = prodFailing ? String(prodFailing) : "";
   document.querySelector('.nav-item[data-panel="prod"]')?.classList.toggle("has-alert", prodFailing > 0);
 }

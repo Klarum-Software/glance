@@ -79,7 +79,18 @@ glance URL to proxy `/api/tmux*` to; how non-host machines join s01's
 session), `inboxDir`, `calendarBin`,
 `gmailBin`, `gmailMaxUnread`, `gmailImportantOnly`, `gmailBlacklist`,
 `gmailSnippets`, `gmailSummarizerCmd`, `teamEmails[]`, `services[]`,
-`presencePort`, `peers[]`, `liveRefreshSec`.
+`presencePort`, `peers[]`, `prodTargets[]`, `prodRefreshSec`,
+`prodHealth[]`, `prodHealthIntervalSec`, `deployTargets[]`,
+`deployRefreshSec`, `liveRefreshSec`.
+
+The PROD panel draws from four sources: `prodTargets` (statusz job feeds,
+fetched lazily with a TTL cache), `prodHealth` (liveness checks polled in the
+background so up/down transitions are recorded even with no client attached;
+transitions persist to `~/.config/glance/prod-history.json`),
+`deployTargets` (latest deploy per target via the local `gh` CLI, either an
+Actions workflow or the GitHub Deployments API), and `prodFleet` (machine
+heartbeats from the pivi gateway's service-token-gated `/api/v2/metrics`;
+renders locked until the Bearer token is added to `prodFleet.headers`).
 
 The browser dashboard subscribes to `/api/events` (server-sent events). A
 background fast lane rescans local claude sessions every `liveRefreshSec`

@@ -75,6 +75,32 @@ const DEFAULTS = {
   // so we cache in-memory and refetch at most once per TTL no matter how many
   // dashboard clients are polling /api/state.
   prodRefreshSec: 30,
+  // Liveness checks polled in the background (independent of dashboard
+  // clients) so up/down transitions are caught even with no tab open. Each
+  // item: { name, url, headers? }. 2xx/3xx counts as up. JSON bodies are
+  // sniffed for a version/environment field when present.
+  prodHealth: [
+    { name: "gateway",  url: "https://api.klarum.com/health" },
+    { name: "app",      url: "https://app.klarum.com/" },
+    { name: "landing",  url: "https://klarum.com/" },
+    { name: "pipeline", url: "https://notices.klarum.com/statusz.json?limit=1" },
+  ],
+  prodHealthIntervalSec: 60,
+  // Deployment sources rendered as cards in the PROD panel. Fetched via the
+  // local `gh` CLI (its auth, not ours). kind "workflow" reads the latest
+  // Actions run of a deploy workflow; kind "deployment" reads the GitHub
+  // Deployments API (how Vercel reports landing/app deploys).
+  deployTargets: [
+    { name: "pivi prod",     kind: "workflow",   repo: "Klarum-Software/pivi", workflow: "deploy-main.yml" },
+    { name: "pivi gateway",  kind: "workflow",   repo: "Klarum-Software/pivi", workflow: "deploy-gateway.yml" },
+    { name: "pivi pipeline", kind: "workflow",   repo: "Klarum-Software/pivi", workflow: "deploy-pipeline.yml" },
+    { name: "landing",       kind: "deployment", repo: "Klarum-Software/klarum-landing", environment: "Production" },
+  ],
+  deployRefreshSec: 120,
+  // Fleet heartbeats from the pivi gateway's service-token-gated metrics
+  // endpoint (GET /api/v2/metrics). Renders locked until the token is added:
+  //   "prodFleet": { "url": "...", "headers": { "Authorization": "Bearer <SERVICE_TOKEN>" } }
+  prodFleet: { url: "https://api.klarum.com/api/v2/metrics" },
   // SSE fast-lane tick (seconds): how often claude sessions are rescanned and
   // pushed to /api/events subscribers (remote presence + tmux go every other
   // tick). Only runs while a subscriber is connected.
@@ -105,6 +131,17 @@ function load() {
     try { env.prodTargets = JSON.parse(process.env.GLANCE_PROD_TARGETS); } catch { /* keep file/default */ }
   }
   if (process.env.GLANCE_PROD_REFRESH_SEC) env.prodRefreshSec = Number(process.env.GLANCE_PROD_REFRESH_SEC);
+  if (process.env.GLANCE_PROD_HEALTH) {
+    try { env.prodHealth = JSON.parse(process.env.GLANCE_PROD_HEALTH); } catch { /* keep file/default */ }
+  }
+  if (process.env.GLANCE_PROD_HEALTH_INTERVAL_SEC) env.prodHealthIntervalSec = Number(process.env.GLANCE_PROD_HEALTH_INTERVAL_SEC);
+  if (process.env.GLANCE_DEPLOY_TARGETS) {
+    try { env.deployTargets = JSON.parse(process.env.GLANCE_DEPLOY_TARGETS); } catch { /* keep file/default */ }
+  }
+  if (process.env.GLANCE_DEPLOY_REFRESH_SEC) env.deployRefreshSec = Number(process.env.GLANCE_DEPLOY_REFRESH_SEC);
+  if (process.env.GLANCE_PROD_FLEET) {
+    try { env.prodFleet = JSON.parse(process.env.GLANCE_PROD_FLEET); } catch { /* keep file/default */ }
+  }
   if (process.env.GLANCE_LIVE_REFRESH_SEC) env.liveRefreshSec = Number(process.env.GLANCE_LIVE_REFRESH_SEC);
 
   return { ...DEFAULTS, ...user, ...env };
