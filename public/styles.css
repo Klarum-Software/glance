@@ -1220,28 +1220,5 @@ a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent)
   color: var(--ink-4);
   margin-left: auto;
 }
+.padmin-flag-name.off { color: var(--ink-4); }
 .padmin-flag-state.on { color: var(--pos); }
-
-/* pivi-style switch: 26x14 pill, knob slides, accent when on */
-.padmin-switch {
-  width: 26px; height: 14px;
-  border-radius: 7px;
-  border: 1px solid var(--rule-2);
-  background: var(--surface-sunk);
-  position: relative;
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-  transition: background 100ms, border-color 100ms;
-}
-.padmin-switch i {
-  position: absolute;
-  top: 1px; left: 1px;
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  background: var(--ink-3);
-  transition: left 100ms, background 100ms;
-}
-.padmin-switch.on { background: rgba(90,182,125,0.25); border-color: var(--pos); }
-.padmin-switch.on i { left: 13px; background: var(--pos); }
-.padmin-switch:hover { border-color: var(--ink-3); }
