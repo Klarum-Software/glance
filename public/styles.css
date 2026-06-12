@@ -549,14 +549,18 @@ a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent)
 .peer-os { font-size: 10px; color: var(--ink-3); text-transform: lowercase; }
 .peer-ip { font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); margin-left: auto; }
 .peer-note { font-size: 11px; color: var(--ink-3); font-style: italic; padding-left: 15px; }
+/* Capped column widths: on a full-width panel an fr-based grid spreads six
+   key/value pairs across the whole row, which reads as broken. auto-fill with
+   a max keeps cells shoulder to shoulder at any panel width. */
 .peer-grid {
   display: grid;
-  grid-template-columns: 1.1fr 1fr 2.4fr 1.6fr 0.9fr;
-  gap: 2px 10px;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 185px));
+  gap: 3px 18px;
   font-size: 11px;
   padding-left: 15px;
 }
 .peer-cell { display: flex; gap: 6px; min-width: 0; align-items: baseline; }
+.peer-cell.wide { grid-column: span 2; }
 .peer-key { color: var(--ink-4); font-size: 10px; flex-shrink: 0; width: 38px; }
 .peer-val {
   color: var(--ink-1);
@@ -568,6 +572,18 @@ a.tcard-title.prod-link:hover { text-decoration: underline; color: var(--accent)
   min-width: 0;
 }
 .peer-val.claude-procs { color: var(--pos); font-weight: 500; }
+.peer-val.warm { color: var(--warn); }
+.peer-val.hot  { color: var(--neg); font-weight: 600; }
+.peer-spark {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-4);
+  letter-spacing: -1px;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 1;
+  min-width: 0;
+}
 
 /* ── sessions column ──────────────────────────────────────────────────── */
 
