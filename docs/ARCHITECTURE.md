@@ -81,12 +81,14 @@ session), `inboxDir`, `calendarBin`,
 `prodHealth[]`, `prodHealthIntervalSec`, `deployTargets[]`,
 `deployRefreshSec`.
 
-The PROD panel draws from three sources: `prodTargets` (statusz job feeds,
+The PROD panel draws from four sources: `prodTargets` (statusz job feeds,
 fetched lazily with a TTL cache), `prodHealth` (liveness checks polled in the
 background so up/down transitions are recorded even with no client attached;
-transitions persist to `~/.config/glance/prod-history.json`), and
+transitions persist to `~/.config/glance/prod-history.json`),
 `deployTargets` (latest deploy per target via the local `gh` CLI, either an
-Actions workflow or the GitHub Deployments API).
+Actions workflow or the GitHub Deployments API), and `prodFleet` (machine
+heartbeats from the pivi gateway's service-token-gated `/api/v2/metrics`;
+renders locked until the Bearer token is added to `prodFleet.headers`).
 
 Each is also overridable via `GLANCE_*` env vars (e.g. `GLANCE_HOST`,
 `GLANCE_TMUX_SESSION`).
