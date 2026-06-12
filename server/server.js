@@ -856,12 +856,89 @@ async function fetchStatuszCached(target) {
 
 async function gatherProd() {
   const targets = Array.isArray(cfg.prodTargets) ? cfg.prodTargets : [];
-  const results = await Promise.all(targets.map(async t => ({
-    name: t.name || t.url,
-    url:  t.url,
-    ...(await fetchStatuszCached(t)),
-  })));
-  return { targets: results, health: snapshotHealth(), deploys: await gatherDeploys() };
+  const [results, fleet, deploys] = await Promise.all([
+    Promise.all(targets.map(async t => ({
+      name: t.name || t.url,
+      url:  t.url,
+      ...(await fetchStatuszCached(t)),
+    }))),
+    gatherFleet(),
+    gatherDeploys(),
+  ]);
+  return { targets: results, health: snapshotHealth(), deploys, fleet };
+}
+
+// ── PROD fleet (pivi gateway /api/v2/metrics) ──────────────────────────────
+// Machine heartbeats pushed by every prod service instance to the gateway's
+// in-memory metrics store. Service-token gated: glance renders the section
+// locked until the user puts the Bearer token into prodFleet.headers. Same
+// TTL + in-flight pattern as the statusz fetcher.
+
+const fleetCache = { fetched_at: 0, result: null, inflight: null };
+
+function fetchFleetOnce(target) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = new URL(target.url); } catch (e) { return resolve({ ok: false, error: "bad url: " + e.message }); }
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request({
+      protocol: url.protocol,
+      host:     url.hostname,
+      port:     url.port || (url.protocol === "https:" ? 443 : 80),
+      path:     url.pathname + (url.search || ""),
+      method:   "GET",
+      headers:  { accept: "application/json", ...target.headers },
+      timeout:  6000,
+    }, r => {
+      const chunks = [];
+      r.on("data", c => chunks.push(c));
+      r.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        // 503 is the gateway's own "metrics disabled, no SERVICE_TOKEN
+        // configured" answer; render it locked rather than as an outage.
+        if (r.statusCode === 401 || r.statusCode === 403 || r.statusCode === 503) {
+          return resolve({ ok: false, auth_required: true, error: `auth required (http ${r.statusCode})`, status_code: r.statusCode });
+        }
+        if (r.statusCode < 200 || r.statusCode >= 300) {
+          return resolve({ ok: false, error: `http ${r.statusCode}`, status_code: r.statusCode });
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); }
+        catch (e) { return resolve({ ok: false, error: "not json: " + e.message }); }
+        const machines = (Array.isArray(parsed.machines) ? parsed.machines : []).map(m => ({
+          machine_id:     m.machine_id,
+          hostname:       m.hostname || m.machine_id,
+          service:        m.service || "unknown",
+          status:         m.status || "unknown",
+          stale:          !!m.stale,
+          uptime_s:       Number.isFinite(m.uptime_seconds) ? Math.round(m.uptime_seconds) : null,
+          current_step:   m.current_step || null,
+          last_job:       m.last_job || null,
+          last_heartbeat: m.last_heartbeat || null,
+        }));
+        resolve({ ok: true, machines, total: parsed.total ?? machines.length, stale_count: parsed.stale_count ?? 0 });
+      });
+    });
+    req.on("error",   e => resolve({ ok: false, error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+    req.end();
+  });
+}
+
+function gatherFleet() {
+  const target = cfg.prodFleet;
+  if (!target || !target.url) return Promise.resolve(null);
+  const ttl = Math.max(10, Number(cfg.prodRefreshSec) || 30) * 1000;
+  if (fleetCache.result && (Date.now() - fleetCache.fetched_at) < ttl) return Promise.resolve(fleetCache.result);
+  if (!fleetCache.inflight) {
+    fleetCache.inflight = fetchFleetOnce(target).then(result => {
+      fleetCache.result = result;
+      fleetCache.fetched_at = Date.now();
+      fleetCache.inflight = null;
+      return result;
+    });
+  }
+  return fleetCache.inflight;
 }
 
 // ── PROD health / uptime tracker ────────────────────────────────────────────
@@ -1330,6 +1407,8 @@ async function actionRefresh() {
   prodCache.clear();
   deployCache.fetched_at = 0;
   deployCache.result = null;
+  fleetCache.fetched_at = 0;
+  fleetCache.result = null;
   return gatherState();
 }
 

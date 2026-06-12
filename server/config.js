@@ -97,6 +97,10 @@ const DEFAULTS = {
     { name: "landing",       kind: "deployment", repo: "Klarum-Software/klarum-landing", environment: "Production" },
   ],
   deployRefreshSec: 120,
+  // Fleet heartbeats from the pivi gateway's service-token-gated metrics
+  // endpoint (GET /api/v2/metrics). Renders locked until the token is added:
+  //   "prodFleet": { "url": "...", "headers": { "Authorization": "Bearer <SERVICE_TOKEN>" } }
+  prodFleet: { url: "https://api.klarum.com/api/v2/metrics" },
 };
 
 function load() {
@@ -131,6 +135,9 @@ function load() {
     try { env.deployTargets = JSON.parse(process.env.GLANCE_DEPLOY_TARGETS); } catch { /* keep file/default */ }
   }
   if (process.env.GLANCE_DEPLOY_REFRESH_SEC) env.deployRefreshSec = Number(process.env.GLANCE_DEPLOY_REFRESH_SEC);
+  if (process.env.GLANCE_PROD_FLEET) {
+    try { env.prodFleet = JSON.parse(process.env.GLANCE_PROD_FLEET); } catch { /* keep file/default */ }
+  }
 
   return { ...DEFAULTS, ...user, ...env };
 }
