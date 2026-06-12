@@ -1784,29 +1784,29 @@ function piviAdminRequest(method, upstreamPath, bodyObj) {
 }
 
 async function handlePiviAdmin(req, res) {
-  if (req.method === "GET" && req.url === "/api/pivi-admin/firms") {
-    const r = await piviAdminRequest("GET", "/api/admin/firms");
+  if (req.method === "GET" && req.url === "/api/pivi-admin/orgs") {
+    const r = await piviAdminRequest("GET", "/api/admin/orgs");
     return send(res, r.ok ? 200 : (r.statusCode || 502), r);
   }
   {
-    const m = req.method === "GET" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features$/);
+    const m = req.method === "GET" && req.url.match(/^\/api\/pivi-admin\/orgs\/([^/?#]+)\/features$/);
     if (m) {
       const id = decodeURIComponent(m[1]);
-      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
-      const r = await piviAdminRequest("GET", `/api/admin/firms/${id}/features`);
+      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid org id" });
+      const r = await piviAdminRequest("GET", `/api/admin/orgs/${id}/features`);
       return send(res, r.ok ? 200 : (r.statusCode || 502), r);
     }
   }
   {
-    const m = req.method === "POST" && req.url.match(/^\/api\/pivi-admin\/firms\/([^/?#]+)\/features\/([^/?#]+)\/toggle$/);
+    const m = req.method === "POST" && req.url.match(/^\/api\/pivi-admin\/orgs\/([^/?#]+)\/features\/([^/?#]+)\/toggle$/);
     if (m) {
       const id = decodeURIComponent(m[1]);
       const feature = decodeURIComponent(m[2]);
-      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid firm id" });
+      if (!PIVI_UUID_RE.test(id)) return send(res, 400, { ok: false, error: "invalid org id" });
       if (!PIVI_FEATURE_RE.test(feature)) return send(res, 400, { ok: false, error: "invalid feature name" });
       const body = await readBody(req);
       const enabled = !!(body && body.enabled);
-      const r = await piviAdminRequest("POST", `/api/admin/firms/${id}/features/${feature}/toggle`, { enabled });
+      const r = await piviAdminRequest("POST", `/api/admin/orgs/${id}/features/${feature}/toggle`, { enabled });
       return send(res, r.ok ? 200 : (r.statusCode || 502), r);
     }
   }
