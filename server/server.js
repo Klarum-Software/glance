@@ -1046,7 +1046,9 @@ function fetchFleetOnce(target) {
           last_job:       m.last_job || null,
           last_heartbeat: m.last_heartbeat || null,
         }));
-        resolve({ ok: true, machines, total: parsed.total ?? machines.length, stale_count: parsed.stale_count ?? 0 });
+        // traffic gauges (requests_last_60s, active_users_5m) land with pivi
+        // PR #1104; absent on older gateways, so pass through nullable.
+        resolve({ ok: true, machines, total: parsed.total ?? machines.length, stale_count: parsed.stale_count ?? 0, traffic: parsed.traffic || null });
       });
     });
     req.on("error",   e => resolve({ ok: false, error: e.message }));

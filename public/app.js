@@ -371,7 +371,11 @@ function renderProd(prod) {
   if (fleet) {
     if (fleet.ok) {
       const bad = fleet.machines.filter(m => m.stale || m.status !== "healthy").length;
-      body.appendChild(prodSubhead("FLEET", `${fleet.total - bad}/${fleet.total} healthy`, bad ? "prod-down" : ""));
+      let meta = `${fleet.total - bad}/${fleet.total} healthy`;
+      if (fleet.traffic) {
+        meta += ` · ${fleet.traffic.requests_last_60s} req/min · ${fleet.traffic.active_users_5m} active users`;
+      }
+      body.appendChild(prodSubhead("FLEET", meta, bad ? "prod-down" : ""));
       if (!fleet.machines.length) body.appendChild(el("div", { class: "prod-empty" }, "no heartbeats yet"));
       for (const m of fleet.machines) {
         if (m.stale || m.status !== "healthy") failing++;
